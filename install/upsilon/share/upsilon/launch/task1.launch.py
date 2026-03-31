@@ -168,6 +168,14 @@ def generate_launch_description():
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
+    visualizer = Node(
+        package='upsilon',
+        executable='visualizer',
+        name='visualizer',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+
     # ------------------------------------------------------------------
     ld = LaunchDescription(ARGUMENTS)
     ld.add_action(gazebo)
@@ -178,4 +186,5 @@ def generate_launch_description():
     ld.add_action(ring_detector)
     ld.add_action(speech)
     ld.add_action(controller)
+    ld.add_action(visualizer)
     return ld

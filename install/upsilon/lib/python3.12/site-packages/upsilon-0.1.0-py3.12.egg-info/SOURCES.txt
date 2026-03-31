@@ -8,7 +8,9 @@ setup.py
 ../build/upsilon/upsilon.egg-info/requires.txt
 ../build/upsilon/upsilon.egg-info/top_level.txt
 ../build/upsilon/upsilon.egg-info/zip-safe
+config/upsilon.rviz
 launch/detectors_only.launch.py
+launch/exploration_only.launch.py
 launch/task1.launch.py
 map/map.pgm
 map/map.yaml
@@ -19,3 +21,4 @@ upsilon/face_detector.py
 upsilon/perception_utils.py
 upsilon/ring_detector.py
 upsilon/speech.py
+upsilon/visualizer.py

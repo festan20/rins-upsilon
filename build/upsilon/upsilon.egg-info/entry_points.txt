@@ -3,3 +3,4 @@ controller = upsilon.controller:main
 face_detector = upsilon.face_detector:main
 ring_detector = upsilon.ring_detector:main
 speech = upsilon.speech:main
+visualizer = upsilon.visualizer:main

@@ -6,8 +6,9 @@ IncrementalTrackManager, and publishes unique detections.
 
 Published topics
 ----------------
-/detected_faces  (geometry_msgs/PointStamped)  — one message per NEW unique face
-/face_markers    (visualization_msgs/MarkerArray) — RViz visualisation
+/detected_faces       (geometry_msgs/PointStamped)  — one message per NEW unique face
+/face_markers         (visualization_msgs/MarkerArray) — RViz visualisation
+/face_detector/debug  (sensor_msgs/Image) — annotated BGR frame with bounding boxes
 """
 
 import rclpy
@@ -61,6 +62,7 @@ class FaceDetectorNode(Node):
         self._marker_pub = self.create_publisher(
             MarkerArray, '/face_markers', QoSReliabilityPolicy.BEST_EFFORT
         )
+        self._debug_pub = self.create_publisher(Image, '/face_detector/debug', 10)
 
         self.get_logger().info('Face detector ready.')
 
@@ -85,11 +87,22 @@ class FaceDetectorNode(Node):
         self._pending_pixels = []
         self._latest_image_stamp = msg.header.stamp
 
+        debug = cv_image.copy()
         for r in results:
-            for box in r.boxes.xyxy:
-                cx = int((box[0] + box[2]) / 2)
-                cy = int((box[1] + box[3]) / 2)
+            for i, box in enumerate(r.boxes.xyxy):
+                x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
                 self._pending_pixels.append((cx, cy))
+                conf = float(r.boxes.conf[i])
+                cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(debug, f'Face {conf:.2f}', (x1, y1 - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        try:
+            self._debug_pub.publish(self.bridge.cv2_to_imgmsg(debug, 'bgr8'))
+        except CvBridgeError:
+            pass
 
     # ------------------------------------------------------------------
     def _cloud_cb(self, msg: PointCloud2) -> None:

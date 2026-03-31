@@ -6,9 +6,10 @@ for 3D localisation in the map frame.
 
 Published topics
 ----------------
-/detected_rings  (geometry_msgs/PointStamped)  — one per NEW unique ring;
-                 frame_id encodes colour: "map/<color>"
-/ring_markers    (visualization_msgs/MarkerArray) — RViz visualisation
+/detected_rings       (geometry_msgs/PointStamped)  — one per NEW unique ring;
+                      frame_id encodes colour: "map/<color>"
+/ring_markers         (visualization_msgs/MarkerArray) — RViz visualisation
+/ring_detector/debug  (sensor_msgs/Image) — annotated BGR frame with detected ellipses
 """
 
 import rclpy
@@ -26,24 +27,26 @@ from cv_bridge import CvBridge, CvBridgeError
 
 from upsilon.perception_utils import DepthCameraGeometry, TF2Helper, IncrementalTrackManager
 
-# Ellipse filter thresholds (same as reference)
-ECC_THR = 100
-RATIO_THR = 1.5
-CENTER_THR = 10  # pixels
+# ---------------------------------------------------------------------------
+# Ellipse filter thresholds
+# ---------------------------------------------------------------------------
+ECC_THR = 120           # max axis length in pixels
+RATIO_THR = 2.5         # max aspect ratio — relaxed from 1.5 to handle perspective
+CENTER_THR = 15         # max pixel distance between ellipse centres
+MIN_CONTOUR_PTS = 15    # min contour points for ellipse fitting
 
-# HSV colour ranges (hue in [0,179] OpenCV convention)
-# Each entry: (name, lower_hsv, upper_hsv)
-# For colours that wrap around 0 (red/orange), two ranges are given.
+# ---------------------------------------------------------------------------
+# HSV colour ranges  (hue in [0,179] OpenCV convention)
+# ---------------------------------------------------------------------------
 COLOUR_RANGES = [
     ('blue',   np.array([100, 80, 50]),  np.array([130, 255, 255])),
     ('green',  np.array([40, 60, 50]),   np.array([80, 255, 255])),
     ('yellow', np.array([20, 100, 100]), np.array([35, 255, 255])),
     ('orange', np.array([5, 150, 100]),  np.array([20, 255, 255])),
     ('purple', np.array([130, 50, 50]),  np.array([160, 255, 255])),
-    # black: low saturation AND low value
+    # black: low saturation AND low value — handled separately
 ]
 
-# Minimum fraction of ring pixels that must match a colour to be accepted
 COLOUR_MIN_FRAC = 0.10
 
 
@@ -109,6 +112,7 @@ class RingDetectorNode(Node):
         self._marker_pub = self.create_publisher(
             MarkerArray, '/ring_markers', QoSReliabilityPolicy.BEST_EFFORT
         )
+        self._debug_pub = self.create_publisher(Image, '/ring_detector/debug', 10)
 
         self.get_logger().info('Ring detector ready.')
 
@@ -129,12 +133,18 @@ class RingDetectorNode(Node):
         bgr = self._latest_bgr
         candidates = self._detect_ring_candidates(bgr)
 
+        debug = bgr.copy()
+
         if not candidates:
+            try:
+                self._debug_pub.publish(self.bridge.cv2_to_imgmsg(debug, 'bgr8'))
+            except CvBridgeError:
+                pass
             return
 
         self.depth_cam.update(msg)
 
-        for (cx, cy), patch in candidates:
+        for (cx, cy), patch, outer_ellipse in candidates:
             colour = classify_colour(patch)
 
             pt = self.depth_cam.get_point(cx, cy)
@@ -154,6 +164,13 @@ class RingDetectorNode(Node):
             mx, my = ps_map.point.x, ps_map.point.y
             track_id, is_new = self.tracker.update(mx, my)
 
+            # Draw ellipse and label on debug image
+            rgba = COLOUR_RGBA.get(colour, COLOUR_RGBA['unknown'])
+            bgr_colour = (int(rgba.b * 255), int(rgba.g * 255), int(rgba.r * 255))
+            cv2.ellipse(debug, outer_ellipse, bgr_colour, 2)
+            cv2.putText(debug, colour, (cx, cy - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, bgr_colour, 1)
+
             if is_new:
                 self.get_logger().info(
                     f'New ring #{track_id} colour={colour} at map ({mx:.2f}, {my:.2f})'
@@ -164,9 +181,14 @@ class RingDetectorNode(Node):
 
             self._publish_markers()
 
+        try:
+            self._debug_pub.publish(self.bridge.cv2_to_imgmsg(debug, 'bgr8'))
+        except CvBridgeError:
+            pass
+
     # ------------------------------------------------------------------
-    def _detect_ring_candidates(self, bgr: np.ndarray) -> list[tuple[tuple[int, int], np.ndarray]]:
-        """Return list of ((cx, cy), colour_patch) for each detected ring."""
+    def _detect_ring_candidates(self, bgr: np.ndarray) -> list[tuple[tuple[int, int], np.ndarray, tuple]]:
+        """Return list of ((cx, cy), colour_patch, outer_ellipse) for each detected ring."""
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, 30
@@ -175,7 +197,7 @@ class RingDetectorNode(Node):
 
         elps = []
         for cnt in contours:
-            if cnt.shape[0] < 20:
+            if cnt.shape[0] < MIN_CONTOUR_PTS:
                 continue
             ellipse = cv2.fitEllipse(cnt)
             e = ellipse[1]
@@ -192,12 +214,24 @@ class RingDetectorNode(Node):
                 if dist >= CENTER_THR:
                     continue
 
-                # Ensure one ellipse contains the other
-                if e1[1][0] >= e2[1][0] and e1[1][1] >= e2[1][1]:
-                    outer = e1
-                elif e2[1][0] >= e1[1][0] and e2[1][1] >= e1[1][1]:
-                    outer = e2
+                # Determine which ellipse is the outer (larger) one.
+                # Use area (pi * a * b) instead of requiring both axes individually,
+                # because perspective warping can make one axis of the "outer"
+                # slightly smaller than the inner's corresponding axis.
+                area1 = e1[1][0] * e1[1][1]
+                area2 = e2[1][0] * e2[1][1]
+
+                if area1 >= area2:
+                    outer, inner = e1, e2
                 else:
+                    outer, inner = e2, e1
+
+                # The outer must be meaningfully larger (at least 10% more area)
+                if area1 == 0 or area2 == 0:
+                    continue
+                bigger = max(area1, area2)
+                smaller = min(area1, area2)
+                if bigger / smaller < 1.1:
                     continue
 
                 cx = int(outer[0][0])
@@ -212,7 +246,7 @@ class RingDetectorNode(Node):
                 y2 = min(cx + half, w)
                 patch = bgr[x1:x2, y1:y2]
 
-                results.append(((cx, cy), patch))
+                results.append(((cx, cy), patch, outer))
 
         return results
 

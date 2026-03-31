@@ -25,4 +25,10 @@ def generate_launch_description():
             name='speech',
             output='screen',
         ),
+        Node(
+            package='upsilon',
+            executable='visualizer',
+            name='visualizer',
+            output='screen',
+        ),
     ])
