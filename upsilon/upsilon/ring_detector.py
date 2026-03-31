@@ -132,8 +132,30 @@ class RingDetectorNode(Node):
         if self._latest_bgr is None:
             return
 
+        try:
+            self._cloud_cb_inner(msg)
+        except Exception as e:
+            self.get_logger().error(f'Ring detection error (recovering): {e}')
+
+    def _cloud_cb_inner(self, msg: PointCloud2) -> None:
         bgr = self._latest_bgr
-        candidates = self._detect_ring_candidates(bgr)
+        self.depth_cam.update(msg)
+
+        depth_img = self.depth_cam.get_depth_image()
+        if depth_img is None:
+            self.get_logger().warn(
+                f'No depth image: cloud {msg.width}x{msg.height}, '
+                f'point_step={msg.point_step}, row_step={msg.row_step}',
+                throttle_duration_sec=5.0,
+            )
+            # Fallback: run detection on BGR if depth image unavailable
+            candidates = self._detect_ring_candidates(bgr, bgr)
+        else:
+            # Convert depth to BGR for circle detection
+            depth_clipped = np.clip(depth_img, 0.0, 5.0)
+            depth_norm = (depth_clipped / 5.0 * 255).astype(np.uint8)
+            depth_bgr = cv2.cvtColor(depth_norm, cv2.COLOR_GRAY2BGR)
+            candidates = self._detect_ring_candidates(depth_bgr, bgr)
 
         debug = bgr.copy()
 
@@ -143,8 +165,6 @@ class RingDetectorNode(Node):
             except CvBridgeError:
                 pass
             return
-
-        self.depth_cam.update(msg)
 
         for (cx, cy), patch, outer_ellipse in candidates:
             colour = classify_colour(patch)
@@ -189,68 +209,107 @@ class RingDetectorNode(Node):
             pass
 
     # ------------------------------------------------------------------
-    def _detect_ring_candidates(self, bgr: np.ndarray) -> list[tuple[tuple[int, int], np.ndarray, tuple]]:
-        """Return list of ((cx, cy), colour_patch, outer_ellipse) for each detected ring."""
+    def _detect_ring_candidates(self, bgr: np.ndarray, bgr_original: np.ndarray) -> list[tuple[tuple[int, int], np.ndarray, tuple]]:
+        """
+        Detect rings using HoughCircles + concentric circle pairing.
+        bgr: image used for circle detection (can be depth-derived)
+        bgr_original: original RGB image used for colour patches
+
+        Returns list of ((cx, cy), colour_patch_bgr, outer_ellipse)
+        """
+        h, w = bgr.shape[:2]
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, 30
+        blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+
+        # --- Publish threshold/edge debug image ---
+        try:
+            edges = cv2.Canny(blurred, 50, 100)
+            edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+            self._treshold.publish(self.bridge.cv2_to_imgmsg(edges_bgr, 'bgr8'))
+        except Exception:
+            pass
+
+        # --- Stage 1: Find candidate circles with HoughCircles ---
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=30,
+            param1=100,
+            param2=30,
+            minRadius=10,
+            maxRadius=150,
         )
-        self._treshold.publish(self.bridge.cv2_to_imgmsg(thresh, 'mono8'))
-        contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        self._contour.publish(self.bridge.cv2_to_imgmsg(contours, 'mono8'))
 
-        elps = []
-        for cnt in contours:
-            if cnt.shape[0] < MIN_CONTOUR_PTS:
+        if circles is None:
+            try:
+                self._contour.publish(self.bridge.cv2_to_imgmsg(bgr_original.copy(), 'bgr8'))
+            except Exception:
+                pass
+            return []
+
+        circles = np.round(circles[0]).astype(int)
+
+        # --- Stage 2: Pair concentric circles (outer + inner = ring) ---
+        circles = sorted(circles, key=lambda c: c[2], reverse=True)
+        used = set()
+        pairs = []
+
+        for i, (x1, y1, r1) in enumerate(circles):
+            if i in used:
                 continue
-            ellipse = cv2.fitEllipse(cnt)
-            e = ellipse[1]
-            a, b = e[0], e[1]
-            ratio = a / b if a > b else b / a
-            if ratio <= RATIO_THR and a < ECC_THR and b < ECC_THR:
-                elps.append(ellipse)
+            for j, (x2, y2, r2) in enumerate(circles):
+                if j in used or j == i:
+                    continue
+                dist = np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+                if dist > max(r1, r2) * 0.3:
+                    continue
+                if r2 >= r1:
+                    continue
+                ratio = r2 / r1
+                if not (0.35 < ratio < 0.85):
+                    continue
+                pairs.append(((x1, y1, r1), (x2, y2, r2)))
+                used.add(i)
+                used.add(j)
+                break
 
+        # --- Stage 3: Build results from paired circles ---
         results = []
-        for n in range(len(elps)):
-            for m in range(n + 1, len(elps)):
-                e1, e2 = elps[n], elps[m]
-                dist = np.sqrt((e1[0][0] - e2[0][0]) ** 2 + (e1[0][1] - e2[0][1]) ** 2)
-                if dist >= CENTER_THR:
-                    continue
+        for outer, inner in pairs:
+            cx, cy, r_out = outer
+            _, _, r_in = inner
 
-                # Determine which ellipse is the outer (larger) one.
-                # Use area (pi * a * b) instead of requiring both axes individually,
-                # because perspective warping can make one axis of the "outer"
-                # slightly smaller than the inner's corresponding axis.
-                area1 = e1[1][0] * e1[1][1]
-                area2 = e2[1][0] * e2[1][1]
+            if cx - r_out < 0 or cx + r_out >= w or cy - r_out < 0 or cy + r_out >= h:
+                continue
 
-                if area1 >= area2:
-                    outer, inner = e1, e2
-                else:
-                    outer, inner = e2, e1
+            # Colour patch from original BGR for colour classification
+            half = max(r_out, 5)
+            y1c = max(cy - half, 0)
+            y2c = min(cy + half, h)
+            x1c = max(cx - half, 0)
+            x2c = min(cx + half, w)
+            patch = bgr_original[y1c:y2c, x1c:x2c]
 
-                # The outer must be meaningfully larger (at least 10% more area)
-                if area1 == 0 or area2 == 0:
-                    continue
-                bigger = max(area1, area2)
-                smaller = min(area1, area2)
-                if bigger / smaller < 1.1:
-                    continue
+            outer_ellipse = ((float(cx), float(cy)),
+                            (float(r_out * 2), float(r_out * 2)),
+                            0.0)
 
-                cx = int(outer[0][0])
-                cy = int(outer[0][1])
-                size = int((outer[1][0] + outer[1][1]) / 2)
-                half = max(size // 2, 5)
+            results.append(((cx, cy), patch, outer_ellipse))
 
-                h, w = bgr.shape[:2]
-                x1 = max(cy - half, 0)
-                x2 = min(cy + half, h)
-                y1 = max(cx - half, 0)
-                y2 = min(cx + half, w)
-                patch = bgr[x1:x2, y1:y2]
-
-                results.append(((cx, cy), patch, outer))
+        # --- Publish contour debug image ---
+        try:
+            vis = bgr_original.copy()
+            for (x, y, r) in circles:
+                cv2.circle(vis, (x, y), r, (128, 128, 128), 1)
+            for (cx, cy), _, ell in results:
+                r = int(ell[1][0] / 2)
+                cv2.circle(vis, (cx, cy), r, (0, 255, 0), 2)
+                cv2.putText(vis, "ring", (cx - 15, cy - r - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            self._contour.publish(self.bridge.cv2_to_imgmsg(vis, 'bgr8'))
+        except Exception:
+            pass
 
         return results
 
