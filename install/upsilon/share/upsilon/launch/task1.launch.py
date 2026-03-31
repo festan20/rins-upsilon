@@ -18,6 +18,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
@@ -95,13 +96,25 @@ def generate_launch_description():
         launch_arguments=[
             ('namespace',    LaunchConfiguration('namespace')),
             ('model',        LaunchConfiguration('model')),
-            ('rviz',         LaunchConfiguration('rviz')),
+            ('rviz',         'false'),  # We launch our own RViz with custom config
             ('use_sim_time', LaunchConfiguration('use_sim_time')),
             ('x',            LaunchConfiguration('x')),
             ('y',            LaunchConfiguration('y')),
             ('z',            LaunchConfiguration('z')),
             ('yaw',          LaunchConfiguration('yaw')),
         ],
+    )
+
+    # ------------------------------------------------------------------
+    # 2b. RViz with custom config (includes marker array displays)
+    # ------------------------------------------------------------------
+    rviz2 = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', PathJoinSubstitution([pkg_upsilon, 'config', 'upsilon.rviz'])],
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
     # ------------------------------------------------------------------
@@ -180,6 +193,7 @@ def generate_launch_description():
     ld = LaunchDescription(ARGUMENTS)
     ld.add_action(gazebo)
     ld.add_action(robot_spawn)
+    ld.add_action(rviz2)
     ld.add_action(localization)
     ld.add_action(nav2)
     ld.add_action(face_detector)

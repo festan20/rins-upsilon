@@ -30,11 +30,11 @@ from upsilon.perception_utils import DepthCameraGeometry, TF2Helper, Incremental
 # ---------------------------------------------------------------------------
 # Ellipse filter thresholds
 # ---------------------------------------------------------------------------
-ECC_THR = 120           # max axis length in pixels
-ECC_MIN = 10            # min axis length — reject tiny noise ellipses
+ECC_THR = 200           # max axis length in pixels (was 120 — too small for close rings)
+ECC_MIN = 8             # min axis length — reject tiny noise ellipses
 RATIO_THR = 2.5         # max aspect ratio — relaxed from 1.5 to handle perspective
 CENTER_THR = 15         # max pixel distance between ellipse centres
-MIN_CONTOUR_PTS = 15    # min contour points for ellipse fitting
+MIN_CONTOUR_PTS = 10    # min contour points for ellipse fitting (was 15)
 DEPTH_MAX = 3.0         # max depth in metres for foreground mask
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ class RingDetectorNode(Node):
         """
         h, w = mask.shape[:2]
 
-        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
         # Publish contour debug
         try:
@@ -277,8 +277,13 @@ class RingDetectorNode(Node):
 
         # Fit ellipses
         elps = []
+        n_too_few = 0
+        n_too_big = 0
+        n_too_small = 0
+        n_bad_ratio = 0
         for cnt in contours:
             if cnt.shape[0] < MIN_CONTOUR_PTS:
+                n_too_few += 1
                 continue
             try:
                 ellipse = cv2.fitEllipse(cnt)
@@ -288,8 +293,20 @@ class RingDetectorNode(Node):
             if a < 1e-3 or b < 1e-3:
                 continue
             ratio = a / b if a > b else b / a
-            if ratio <= RATIO_THR and ECC_MIN < a < ECC_THR and ECC_MIN < b < ECC_THR:
+            if a >= ECC_THR or b >= ECC_THR:
+                n_too_big += 1
+            elif a <= ECC_MIN or b <= ECC_MIN:
+                n_too_small += 1
+            elif ratio > RATIO_THR:
+                n_bad_ratio += 1
+            else:
                 elps.append(ellipse)
+
+        self.get_logger().info(
+            f'Contours:{len(contours)} too_few_pts:{n_too_few} '
+            f'too_big:{n_too_big} too_small:{n_too_small} bad_ratio:{n_bad_ratio} '
+            f'valid_ellipses:{len(elps)}',
+            throttle_duration_sec=2.0)
 
         # Draw ALL fitted ellipses in thin gray
         for e in elps:
@@ -331,9 +348,9 @@ class RingDetectorNode(Node):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
                 continue
 
-            # --- Annulus colour on ROI (1.0x to 1.1x) ---
+            # --- Annulus colour on ROI (1.0x to 1.2x) — widened for inner contours ---
             ell_roi = (rc, ellipse[1], ellipse[2])
-            outer_sample_roi = (rc, (ellipse[1][0] * 1.1, ellipse[1][1] * 1.1), ellipse[2])
+            outer_sample_roi = (rc, (ellipse[1][0] * 1.2, ellipse[1][1] * 1.2), ellipse[2])
             annulus_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
             cv2.ellipse(annulus_roi, outer_sample_roi, 255, -1)
             cv2.ellipse(annulus_roi, ell_roi, 0, -1)
@@ -341,6 +358,10 @@ class RingDetectorNode(Node):
             bgr_roi = bgr_original[roi_y1:roi_y2, roi_x1:roi_x2]
             ring_pixels = bgr_roi[annulus_roi > 0]
             if len(ring_pixels) < 20:
+                self.get_logger().info(
+                    f'Ellipse at ({cx},{cy}) axes=({ellipse[1][0]:.0f},{ellipse[1][1]:.0f}) '
+                    f'hole={hole_fill_ratio:.2f} annulus_px={len(ring_pixels)} — too few annulus pixels',
+                    throttle_duration_sec=2.0)
                 continue
 
             # Classify colour from ring body pixels
