@@ -40,17 +40,25 @@ class VisualizerNode(Node):
         # Ring detector debug
         self.create_subscription(
             Image, '/ring_detector/debug', self._ring_debug_cb, qos)
+        self.create_subscription(
+            Image, '/ring_detector/threshold', self._ring_threshold_cb, qos)
+        self.create_subscription(
+            Image, '/ring_detector/contours', self._ring_contours_cb, qos)
 
         # Create named windows
         cv2.namedWindow('Camera POV', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Depth View', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Face Detection', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Ring Detection', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Threshold', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Contours', cv2.WINDOW_NORMAL)
 
         cv2.resizeWindow('Camera POV', WINDOW_W, WINDOW_H)
         cv2.resizeWindow('Depth View', WINDOW_W, WINDOW_H)
         cv2.resizeWindow('Face Detection', WINDOW_W, WINDOW_H)
         cv2.resizeWindow('Ring Detection', WINDOW_W, WINDOW_H)
+        cv2.resizeWindow('Threshold', WINDOW_W, WINDOW_H)
+        cv2.resizeWindow('Contours', WINDOW_W, WINDOW_H)
 
         # Periodic waitKey so OpenCV processes GUI events
         self.create_timer(0.03, self._gui_tick)
@@ -110,6 +118,20 @@ class VisualizerNode(Node):
         except CvBridgeError:
             return
         cv2.imshow('Ring Detection', frame)
+
+    def _ring_threshold_cb(self, msg: Image) -> None:
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, 'mono8')
+        except CvBridgeError:
+            return
+        cv2.imshow('Threshold', frame)
+
+    def _ring_contours_cb(self, msg: Image) -> None:
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError:
+            return
+        cv2.imshow('Contours', frame)
 
     def _gui_tick(self) -> None:
         cv2.waitKey(1)

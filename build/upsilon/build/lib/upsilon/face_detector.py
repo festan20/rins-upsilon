@@ -74,15 +74,19 @@ class FaceDetectorNode(Node):
             self.get_logger().error(f'CvBridgeError: {e}')
             return
 
-        results = self.model.predict(
-            cv_image,
-            imgsz=(256, 320),
-            show=False,
-            verbose=False,
-            classes=[0],
-            device=self._device,
-            conf=CONFIDENCE_THRESHOLD,
-        )
+        try:
+            results = self.model.predict(
+                cv_image,
+                imgsz=(256, 320),
+                show=False,
+                verbose=False,
+                classes=[0],
+                device=self._device,
+                conf=CONFIDENCE_THRESHOLD,
+            )
+        except Exception as e:
+            self.get_logger().error(f'YOLO error: {e}', throttle_duration_sec=5.0)
+            return
 
         self._pending_pixels = []
         self._latest_image_stamp = msg.header.stamp
@@ -98,6 +102,12 @@ class FaceDetectorNode(Node):
                 cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(debug, f'Face {conf:.2f}', (x1, y1 - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        # Status text + tracked faces count
+        n_det = len(self._pending_pixels)
+        n_tracked = self.tracker.track_count
+        cv2.putText(debug, f'det:{n_det} tracked:{n_tracked}', (10, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         try:
             self._debug_pub.publish(self.bridge.cv2_to_imgmsg(debug, 'bgr8'))

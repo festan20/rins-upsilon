@@ -31,6 +31,38 @@ class DepthCameraGeometry:
         self._point_step = cloud_msg.point_step
         self._row_step = cloud_msg.row_step
 
+    def get_depth_image(self) -> np.ndarray | None:
+        """Extract a 2D depth image (float32, metres) from the cached PointCloud2.
+
+        Returns an (H, W) array of Z values, or None if no cloud is cached.
+        NaN/invalid pixels are set to 0.
+        """
+        if not hasattr(self, '_raw'):
+            return None
+
+        h, w = self._cloud_height, self._cloud_width
+        if h == 0 or w == 0:
+            return None
+
+        ps = self._point_step
+        rs = self._row_step
+
+        # Handle row padding: extract row by row if row_step != width * point_step
+        if rs == w * ps:
+            flat = self._raw[:h * w * ps].reshape(h * w, ps)
+        else:
+            rows = []
+            for v in range(h):
+                row_start = v * rs
+                row = self._raw[row_start:row_start + w * ps].reshape(w, ps)
+                rows.append(row)
+            flat = np.vstack(rows)
+
+        z_bytes = flat[:, 8:12].copy()  # copy to ensure contiguous
+        z_vals = z_bytes.view(np.float32).reshape(h, w)
+        depth = np.where(np.isfinite(z_vals) & (z_vals > 0.0), z_vals, 0.0).astype(np.float32)
+        return depth
+
     def get_point(self, u: int, v: int):
         """Return (x, y, z) in camera frame at pixel (u, v), or None if invalid.
 
@@ -94,7 +126,7 @@ class IncrementalTrackManager:
         self._tracks: list[dict] = []  # [{'id': int, 'x': float, 'y': float, 'count': int}]
         self._next_id = 0
 
-    def update(self, x: float, y: float) -> tuple[int, bool]:
+    def update(self, x: float, y: float, colour: str = 'unknown') -> tuple[int, bool]:
         """Register a detection at (x, y) in map frame.
 
         Returns (track_id, is_new) where is_new=True means first time this
@@ -108,12 +140,14 @@ class IncrementalTrackManager:
                 track['x'] = (track['x'] * n + x) / (n + 1)
                 track['y'] = (track['y'] * n + y) / (n + 1)
                 track['count'] += 1
+                if colour != 'unknown':
+                    track['colour'] = colour
                 return track['id'], False
 
         # New track
         tid = self._next_id
         self._next_id += 1
-        self._tracks.append({'id': tid, 'x': x, 'y': y, 'count': 1})
+        self._tracks.append({'id': tid, 'x': x, 'y': y, 'count': 1, 'colour': colour})
         return tid, True
 
     def get_position(self, track_id: int) -> tuple[float, float] | None:

@@ -126,7 +126,7 @@ class IncrementalTrackManager:
         self._tracks: list[dict] = []  # [{'id': int, 'x': float, 'y': float, 'count': int}]
         self._next_id = 0
 
-    def update(self, x: float, y: float) -> tuple[int, bool]:
+    def update(self, x: float, y: float, colour: str = 'unknown') -> tuple[int, bool]:
         """Register a detection at (x, y) in map frame.
 
         Returns (track_id, is_new) where is_new=True means first time this
@@ -140,12 +140,14 @@ class IncrementalTrackManager:
                 track['x'] = (track['x'] * n + x) / (n + 1)
                 track['y'] = (track['y'] * n + y) / (n + 1)
                 track['count'] += 1
+                if colour != 'unknown':
+                    track['colour'] = colour
                 return track['id'], False
 
         # New track
         tid = self._next_id
         self._next_id += 1
-        self._tracks.append({'id': tid, 'x': x, 'y': y, 'count': 1})
+        self._tracks.append({'id': tid, 'x': x, 'y': y, 'count': 1, 'colour': colour})
         return tid, True
 
     def get_position(self, track_id: int) -> tuple[float, float] | None:

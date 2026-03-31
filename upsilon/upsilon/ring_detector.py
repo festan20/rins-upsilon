@@ -108,6 +108,8 @@ class RingDetectorNode(Node):
 
         self._latest_bgr: np.ndarray | None = None
         self._latest_stamp = None
+        self._last_process_time = 0.0
+        self._process_interval = 1.0 / 5.0  # 5 Hz rate limit
 
         qos = qos_profile_sensor_data
 
@@ -137,6 +139,11 @@ class RingDetectorNode(Node):
     def _cloud_cb(self, msg: PointCloud2) -> None:
         if self._latest_bgr is None:
             return
+
+        now = self.get_clock().now().nanoseconds / 1e9
+        if now - self._last_process_time < self._process_interval:
+            return
+        self._last_process_time = now
 
         try:
             self._cloud_cb_inner(msg)
@@ -223,7 +230,7 @@ class RingDetectorNode(Node):
                 continue
 
             mx, my = ps_map.point.x, ps_map.point.y
-            track_id, is_new = self.tracker.update(mx, my)
+            track_id, is_new = self.tracker.update(mx, my, colour)
 
             # Draw colour label on debug image
             rgba = COLOUR_RGBA.get(colour, COLOUR_RGBA['unknown'])
