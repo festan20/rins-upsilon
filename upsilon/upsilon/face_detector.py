@@ -145,12 +145,26 @@ class FaceDetectorNode(Node):
             if cx < 0 or cx >= width or cy < 0 or cy >= height:
                 continue
 
-            d = a[cy, cx, :]
+            # Sample a patch around center, take median of valid points
+            patch_r = 10
+            v_lo = max(0, cy - patch_r)
+            v_hi = min(height, cy + patch_r + 1)
+            u_lo = max(0, cx - patch_r)
+            u_hi = min(width, cx + patch_r + 1)
+            patch = a[v_lo:v_hi, u_lo:u_hi, :]  # (pH, pW, 3)
+            patch_flat = patch.reshape(-1, 3)
+            valid = patch_flat[
+                np.isfinite(patch_flat[:, 0]) &
+                np.isfinite(patch_flat[:, 1]) &
+                np.isfinite(patch_flat[:, 2]) &
+                (patch_flat[:, 2] > 0)
+            ]
 
-            # Check for valid depth
-            if not (np.isfinite(d[0]) and np.isfinite(d[1]) and np.isfinite(d[2]) and d[2] > 0):
-                self.get_logger().info('Face detected but no valid depth.')
+            if len(valid) == 0:
+                self.get_logger().info('Face detected but no valid depth in patch.')
                 continue
+
+            d = np.median(valid, axis=0)
 
             # Build PointStamped in camera frame
             pt = PointStamped()
@@ -163,7 +177,7 @@ class FaceDetectorNode(Node):
             # Transform to map frame
             map_pt = self.tf2.transform_point(pt, 'map')
             if map_pt is None:
-                self.get_logger().info('Face detected but TF to map failed.')
+                self.get_logger().warn(f'TF failed: {msg.header.frame_id} -> map')
                 continue
 
             mx = map_pt.point.x
