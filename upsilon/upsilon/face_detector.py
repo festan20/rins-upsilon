@@ -1,68 +1,65 @@
 """Face detector node.
 
-Detects people (face posters) using YOLOv8n, lifts detections to map-frame
-3D poses using the OAK-D depth point cloud, deduplicates with
-IncrementalTrackManager, and publishes unique detections.
+Detects face posters using YOLOv8 person detection on OAK-D RGB + depth,
+transforms to map frame and deduplicates.
 
 Published topics
 ----------------
-/detected_faces       (geometry_msgs/PointStamped)  — one message per NEW unique face
+/detected_faces       (geometry_msgs/PointStamped)  — one per NEW unique face
 /face_markers         (visualization_msgs/MarkerArray) — RViz visualisation
-/face_detector/debug  (sensor_msgs/Image) — annotated BGR frame with bounding boxes
+/face_detector/debug  (sensor_msgs/Image) — annotated BGR frame
 """
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSReliabilityPolicy
 
+import cv2
+import numpy as np
+
 from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 from geometry_msgs.msg import PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
-
 from cv_bridge import CvBridge, CvBridgeError
-import cv2
 
 from ultralytics import YOLO
 
-from upsilon.perception_utils import DepthCameraGeometry, TF2Helper, IncrementalTrackManager
-
-# Minimum YOLO confidence to consider a detection
-CONFIDENCE_THRESHOLD = 0.5
-# Marker lifetime (seconds); 0 = forever
-MARKER_LIFETIME_S = 0.0
+from upsilon.perception_utils import TF2Helper, IncrementalTrackManager
 
 
 class FaceDetectorNode(Node):
+
     def __init__(self):
         super().__init__('face_detector')
 
-        self.declare_parameter('device', '')
-        device = self.get_parameter('device').get_parameter_value().string_value
+        self.declare_parameters(namespace='', parameters=[('device', '')])
+        self.device = self.get_parameter('device').get_parameter_value().string_value
 
         self.bridge = CvBridge()
-        self.depth_cam = DepthCameraGeometry(patch_radius=4)
         self.tf2 = TF2Helper(self)
         self.tracker = IncrementalTrackManager(merge_distance=0.8)
 
-        # Latest pixel detections waiting for depth callback
-        self._pending_pixels: list[tuple[int, int]] = []
-        self._latest_image_stamp = None
+        self.detection_color = (0, 0, 255)
+        self._latest_bgr = None
+        self._faces = []  # list of (cx, cy) from latest RGB frame
 
-        self.model = YOLO('yolov8n.pt')
-        self._device = device
+        self._last_process_time = 0.0
+        self._process_interval = 1.0 / 5.0  # 5 Hz rate limit
 
         qos = qos_profile_sensor_data
 
+        # Subscribers
         self.create_subscription(Image, '/oakd/rgb/preview/image_raw', self._rgb_cb, qos)
         self.create_subscription(PointCloud2, '/oakd/rgb/preview/depth/points', self._cloud_cb, qos)
 
+        # Publishers
         self._face_pub = self.create_publisher(PointStamped, '/detected_faces', 10)
-        self._marker_pub = self.create_publisher(
-            MarkerArray, '/face_markers', QoSReliabilityPolicy.BEST_EFFORT
-        )
+        self._marker_pub = self.create_publisher(MarkerArray, '/face_markers', 10)
         self._debug_pub = self.create_publisher(Image, '/face_detector/debug', 10)
+
+        self.model = YOLO("yolov8n.pt")
 
         self.get_logger().info('Face detector ready.')
 
@@ -74,86 +71,127 @@ class FaceDetectorNode(Node):
             self.get_logger().error(f'CvBridgeError: {e}')
             return
 
-        try:
-            results = self.model.predict(
+        self._faces = []
+
+        # Run YOLO inference
+        res = self.model.predict(
+            cv_image, imgsz=(256, 320), show=False, verbose=False,
+            classes=[0], device=self.device
+        )
+
+        for x in res:
+            bbox = x.boxes.xyxy
+            if bbox.nelement() == 0:
+                continue
+
+            bbox = bbox[0]
+
+            # Draw bounding box
+            cv_image = cv2.rectangle(
                 cv_image,
-                imgsz=(256, 320),
-                show=False,
-                verbose=False,
-                classes=[0],
-                device=self._device,
-                conf=CONFIDENCE_THRESHOLD,
+                (int(bbox[0]), int(bbox[1])),
+                (int(bbox[2]), int(bbox[3])),
+                self.detection_color, 3
             )
-        except Exception as e:
-            self.get_logger().error(f'YOLO error: {e}', throttle_duration_sec=5.0)
-            return
 
-        self._pending_pixels = []
-        self._latest_image_stamp = msg.header.stamp
+            cx = int((bbox[0] + bbox[2]) / 2)
+            cy = int((bbox[1] + bbox[3]) / 2)
 
-        debug = cv_image.copy()
-        for r in results:
-            for i, box in enumerate(r.boxes.xyxy):
-                x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                cx = (x1 + x2) // 2
-                cy = (y1 + y2) // 2
-                self._pending_pixels.append((cx, cy))
-                conf = float(r.boxes.conf[i])
-                cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(debug, f'Face {conf:.2f}', (x1, y1 - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            # Draw center
+            cv_image = cv2.circle(cv_image, (cx, cy), 5, self.detection_color, -1)
+            self._faces.append((cx, cy))
 
-        # Status text + tracked faces count
-        n_det = len(self._pending_pixels)
-        n_tracked = self.tracker.track_count
-        cv2.putText(debug, f'det:{n_det} tracked:{n_tracked}', (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # Status text
+        cv2.putText(
+            cv_image,
+            f'Faces: {len(self._faces)} | Tracked: {self.tracker.track_count}',
+            (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
+        )
+
+        # Store for later use and publish debug image
+        self._latest_bgr = cv_image
 
         try:
-            self._debug_pub.publish(self.bridge.cv2_to_imgmsg(debug, 'bgr8'))
-        except CvBridgeError:
-            pass
+            debug_msg = self.bridge.cv2_to_imgmsg(cv_image, 'bgr8')
+            self._debug_pub.publish(debug_msg)
+        except CvBridgeError as e:
+            self.get_logger().error(f'Debug publish error: {e}')
 
     # ------------------------------------------------------------------
     def _cloud_cb(self, msg: PointCloud2) -> None:
-        if not self._pending_pixels:
+        if not self._faces:
             return
 
-        self.depth_cam.update(msg)
+        now = self.get_clock().now().nanoseconds / 1e9
+        if now - self._last_process_time < self._process_interval:
+            return
+        self._last_process_time = now
 
-        for cx, cy in self._pending_pixels:
-            pt = self.depth_cam.get_point(cx, cy)
-            if pt is None:
+        try:
+            self._cloud_cb_inner(msg)
+        except Exception as e:
+            self.get_logger().error(f'Face detection error (recovering): {e}')
+
+    def _cloud_cb_inner(self, msg: PointCloud2) -> None:
+        height = msg.height
+        width = msg.width
+
+        # Get 3D points from pointcloud
+        a = pc2.read_points_numpy(msg, field_names=("x", "y", "z"))
+        a = a.reshape((height, width, 3))
+
+        for cx, cy in self._faces:
+            # Bounds check
+            if cx < 0 or cx >= width or cy < 0 or cy >= height:
                 continue
 
-            # Build a PointStamped in camera frame and transform to map
-            ps = PointStamped()
-            ps.header.frame_id = msg.header.frame_id
-            ps.header.stamp = msg.header.stamp
-            ps.point.x, ps.point.y, ps.point.z = pt
+            d = a[cy, cx, :]
 
-            ps_map = self.tf2.transform_point(ps, 'map')
-            if ps_map is None:
-                self.get_logger().warn('TF transform to map failed; skipping.')
+            # Check for valid depth
+            if not (np.isfinite(d[0]) and np.isfinite(d[1]) and np.isfinite(d[2]) and d[2] > 0):
+                self.get_logger().info('Face detected but no valid depth.')
                 continue
 
-            mx, my = ps_map.point.x, ps_map.point.y
+            # Build PointStamped in camera frame
+            pt = PointStamped()
+            pt.header.frame_id = msg.header.frame_id
+            pt.header.stamp = msg.header.stamp
+            pt.point.x = float(d[0])
+            pt.point.y = float(d[1])
+            pt.point.z = float(d[2])
+
+            # Transform to map frame
+            map_pt = self.tf2.transform_point(pt, 'map')
+            if map_pt is None:
+                self.get_logger().info('Face detected but TF to map failed.')
+                continue
+
+            mx = map_pt.point.x
+            my = map_pt.point.y
+            mz = map_pt.point.z
+
+            # Deduplicate
             track_id, is_new = self.tracker.update(mx, my)
 
             if is_new:
                 self.get_logger().info(
-                    f'New face #{track_id} at map ({mx:.2f}, {my:.2f})'
+                    f'NEW FACE #{track_id} at map ({mx:.2f}, {my:.2f}, {mz:.2f})'
                 )
-                self._face_pub.publish(ps_map)
+                # Publish detection
+                det = PointStamped()
+                det.header.frame_id = 'map'
+                det.header.stamp = msg.header.stamp
+                det.point.x = mx
+                det.point.y = my
+                det.point.z = mz
+                self._face_pub.publish(det)
 
-            self._publish_markers()
+        self._publish_markers()
 
-        self._pending_pixels = []
-
-    # ------------------------------------------------------------------
     def _publish_markers(self) -> None:
+        """Republish markers for ALL tracked faces."""
         arr = MarkerArray()
-        for i, track in enumerate(self.tracker._tracks):
+        for track in self.tracker._tracks:
             m = Marker()
             m.header.frame_id = 'map'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -163,16 +201,19 @@ class FaceDetectorNode(Node):
             m.action = Marker.ADD
             m.pose.position.x = track['x']
             m.pose.position.y = track['y']
-            m.pose.position.z = 1.5  # approximate face height
+            m.pose.position.z = 0.5
             m.pose.orientation.w = 1.0
-            m.scale.x = m.scale.y = m.scale.z = 0.2
-            m.color = ColorRGBA(r=1.0, g=0.8, b=0.0, a=1.0)
+            m.scale.x = 0.15
+            m.scale.y = 0.15
+            m.scale.z = 0.15
+            m.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
             arr.markers.append(m)
         self._marker_pub.publish(arr)
 
 
 def main():
-    rclpy.init()
+    print('Face detection node starting.')
+    rclpy.init(args=None)
     node = FaceDetectorNode()
     try:
         rclpy.spin(node)
@@ -181,3 +222,7 @@ def main():
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

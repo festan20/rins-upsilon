@@ -43,7 +43,7 @@ class VisualizerNode(Node):
         self.create_subscription(
             Image, '/ring_detector/threshold', self._ring_threshold_cb, qos)
         self.create_subscription(
-            Image, '/ring_detector/contours', self._ring_contours_cb, qos)
+            Image, '/ring_detector/contour', self._ring_contours_cb, qos)
 
         # Create named windows
         cv2.namedWindow('Camera POV', cv2.WINDOW_NORMAL)
