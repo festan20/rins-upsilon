@@ -17,6 +17,9 @@
 ├── dis_tutorial4/         ← REFERENCE ONLY — TF transforms patterns
 ├── dis_tutorial5/         ← REFERENCE ONLY — ring detection patterns
 └── upsilon/               ← ACTIVE WORK — all implementation goes here
+    └── map/               ← pre-built arena map
+        ├── map.pgm
+        └── map.yaml       ← resolution 0.05m, origin [-3.141, -4.408, 0]
 ```
 
 **Rule: only write code inside `upsilon/`. Everything else is read-only reference material.**
@@ -58,6 +61,7 @@ Key nodes to implement:
 - **Face detection**: YOLOv8 person detection — faces are printed posters on walls
 - **Ring detection**: HSV segmentation + contour filtering — rings are 2D textured wall images
 - **Speech**: `espeak` via subprocess (non-blocking)
+- **Map**: Pre-built map in `upsilon/map/` (map.pgm + map.yaml); loaded at startup via Nav2 map server
 - **Exploration**: Hand-coded coverage waypoints + Nav2
 - **Messages**: Standard ROS2 msgs only (no custom types)
 - **Deduplication**: Applied in both detectors and controller
@@ -77,5 +81,5 @@ Key nodes to implement:
 ## Open Questions
 
 - What is the final package name (instead of `megatron`)?
-- Is the map pre-built or does the robot map first each run?
 - Where is `yolov8n.pt` located in the workspace?
+- Is the single map valid for all three competition worlds (`task1_blue/green/yellow_demo`)?
