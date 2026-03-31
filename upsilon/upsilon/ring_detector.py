@@ -41,6 +41,8 @@ DEPTH_MAX = 3.0         # max depth in metres for foreground mask
 # HSV colour ranges  (hue in [0,179] OpenCV convention)
 # ---------------------------------------------------------------------------
 COLOUR_RANGES = [
+    ('red',    np.array([0, 100, 80]),   np.array([5, 255, 255])),
+    ('red',    np.array([170, 100, 80]), np.array([179, 255, 255])),
     ('blue',   np.array([100, 80, 50]),  np.array([130, 255, 255])),
     ('green',  np.array([40, 60, 50]),   np.array([80, 255, 255])),
     ('yellow', np.array([20, 100, 100]), np.array([35, 255, 255])),
@@ -84,6 +86,7 @@ def classify_colour(bgr_patch: np.ndarray) -> tuple[str, float]:
 
 # Map colour names to RGBA for RViz markers
 COLOUR_RGBA = {
+    'red':     ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0),
     'blue':    ColorRGBA(r=0.0, g=0.3, b=1.0, a=1.0),
     'green':   ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0),
     'yellow':  ColorRGBA(r=1.0, g=1.0, b=0.0, a=1.0),
@@ -171,19 +174,47 @@ class RingDetectorNode(Node):
         cv2.putText(debug, status, (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-        for (cx, cy), patch, outer_ellipse in candidates:
-            colour, _ = classify_colour(patch)
+        for (cx, cy), colour, outer_ellipse in candidates:
+            # Sample depth at 12 points on the ring body (1.05x = midpoint of 1.0-1.1x annulus)
+            a_axis = outer_ellipse[1][0] / 2 * 1.05
+            b_axis = outer_ellipse[1][1] / 2 * 1.05
+            angle_rad = np.radians(outer_ellipse[2])
+            ecx = int(outer_ellipse[0][0])
+            ecy = int(outer_ellipse[0][1])
 
-            pt = self.depth_cam.get_point(cx, cy)
-            if pt is None:
-                cv2.putText(debug, f'{colour} no depth', (cx, cy + 15),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            ring_frac = 1.0  # already scaled to 1.05x above
+            n_samples = 12
+            valid_pts = []
+
+            for i in range(n_samples):
+                theta = 2 * np.pi * i / n_samples
+                local_x = ring_frac * a_axis * np.cos(theta)
+                local_y = ring_frac * b_axis * np.sin(theta)
+                sx = int(ecx + local_x * np.cos(angle_rad) - local_y * np.sin(angle_rad))
+                sy = int(ecy + local_x * np.sin(angle_rad) + local_y * np.cos(angle_rad))
+
+                pt = self.depth_cam.get_point(sx, sy)
+                if pt is not None:
+                    valid_pts.append(pt)
+                    cv2.circle(debug, (sx, sy), 2, (0, 255, 0), -1)
+                else:
+                    cv2.circle(debug, (sx, sy), 2, (0, 0, 255), -1)
+
+            if len(valid_pts) < 3:
+                cv2.putText(debug, f'{colour} low depth ({len(valid_pts)})',
+                            (cx, cy + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
                 continue
+
+            # Median to reject outliers
+            pts_array = np.array(valid_pts)
+            med_x = float(np.median(pts_array[:, 0]))
+            med_y = float(np.median(pts_array[:, 1]))
+            med_z = float(np.median(pts_array[:, 2]))
 
             ps = PointStamped()
             ps.header.frame_id = msg.header.frame_id
             ps.header.stamp = msg.header.stamp
-            ps.point.x, ps.point.y, ps.point.z = pt
+            ps.point.x, ps.point.y, ps.point.z = med_x, med_y, med_z
 
             ps_map = self.tf2.transform_point(ps, 'map')
             if ps_map is None:
@@ -215,12 +246,12 @@ class RingDetectorNode(Node):
             pass
 
     # ------------------------------------------------------------------
-    def _detect_ring_candidates(self, mask: np.ndarray, bgr_original: np.ndarray, debug: np.ndarray) -> tuple[list[tuple[tuple[int, int], np.ndarray, tuple]], int]:
+    def _detect_ring_candidates(self, mask: np.ndarray, bgr_original: np.ndarray, debug: np.ndarray):
         """
-        Detect rings via ellipse fitting on a binary depth mask.
-        Draws all fitted ellipses and paired rings onto debug image.
+        Detect rings via single ellipse fitting + hole check + annulus colour.
 
-        Returns (results, n_ellipses) where results is list of ((cx, cy), colour_patch_bgr, outer_ellipse)
+        Returns (results, n_ellipses) where results is list of
+            ((cx, cy), colour, ellipse)
         """
         h, w = mask.shape[:2]
 
@@ -234,7 +265,7 @@ class RingDetectorNode(Node):
         except CvBridgeError:
             pass
 
-        # Cap contour count to keep processing tractable
+        # Cap contour count
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:500]
 
         # Fit ellipses
@@ -253,21 +284,37 @@ class RingDetectorNode(Node):
             if ratio <= RATIO_THR and ECC_MIN < a < ECC_THR and ECC_MIN < b < ECC_THR:
                 elps.append(ellipse)
 
-        # Draw ALL fitted ellipses in thin gray on debug
+        # Draw ALL fitted ellipses in thin gray
         for e in elps:
             cv2.ellipse(debug, e, (128, 128, 128), 1)
 
-        # Validate each ellipse with hole check + colour
+        # Validate each ellipse with hole check + annulus colour
         results = []
         for ellipse in elps:
             cx = int(ellipse[0][0])
             cy = int(ellipse[0][1])
+            r_max = int(max(ellipse[1][0], ellipse[1][1]) / 2)
 
-            # --- Hole check: a ring has an empty interior in the depth mask ---
-            inner_ell = (ellipse[0], (ellipse[1][0] * 0.6, ellipse[1][1] * 0.6), ellipse[2])
-            inner_mask = np.zeros_like(mask)
-            cv2.ellipse(inner_mask, inner_ell, 255, -1)
-            hole_pixels = mask[inner_mask > 0]
+            # ROI bounding box (padded for 1.1x outer)
+            pad = int(r_max * 1.2) + 2
+            roi_x1 = max(cx - pad, 0)
+            roi_x2 = min(cx + pad, w)
+            roi_y1 = max(cy - pad, 0)
+            roi_y2 = min(cy + pad, h)
+            roi_w = roi_x2 - roi_x1
+            roi_h = roi_y2 - roi_y1
+            if roi_w < 5 or roi_h < 5:
+                continue
+
+            # Ellipse center in ROI coordinates
+            rc = (ellipse[0][0] - roi_x1, ellipse[0][1] - roi_y1)
+
+            # --- Hole check on ROI ---
+            inner_ell_roi = (rc, (ellipse[1][0] * 0.6, ellipse[1][1] * 0.6), ellipse[2])
+            inner_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
+            cv2.ellipse(inner_roi, inner_ell_roi, 255, -1)
+            mask_roi = mask[roi_y1:roi_y2, roi_x1:roi_x2]
+            hole_pixels = mask_roi[inner_roi > 0]
             if len(hole_pixels) == 0:
                 continue
             hole_fill_ratio = np.count_nonzero(hole_pixels) / len(hole_pixels)
@@ -277,29 +324,30 @@ class RingDetectorNode(Node):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
                 continue
 
-            # --- Colour check on BGR patch ---
-            size = int((ellipse[1][0] + ellipse[1][1]) / 2)
-            half = max(size // 2, 5)
-            x1 = max(cx - half, 0)
-            x2 = min(cx + half, w)
-            y1 = max(cy - half, 0)
-            y2 = min(cy + half, h)
-            patch = bgr_original[y1:y2, x1:x2]
-            if patch.size == 0:
+            # --- Annulus colour on ROI (1.0x to 1.1x) ---
+            ell_roi = (rc, ellipse[1], ellipse[2])
+            outer_sample_roi = (rc, (ellipse[1][0] * 1.1, ellipse[1][1] * 1.1), ellipse[2])
+            annulus_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
+            cv2.ellipse(annulus_roi, outer_sample_roi, 255, -1)
+            cv2.ellipse(annulus_roi, ell_roi, 0, -1)
+
+            bgr_roi = bgr_original[roi_y1:roi_y2, roi_x1:roi_x2]
+            ring_pixels = bgr_roi[annulus_roi > 0]
+            if len(ring_pixels) < 20:
                 continue
 
+            # Classify colour from ring body pixels
+            patch = ring_pixels.reshape(-1, 1, 3)
             colour, frac = classify_colour(patch)
-            if colour == 'unknown':
-                cv2.putText(debug, f'hole ok,no clr {frac:.0%}', (cx, cy - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128, 128, 128), 1)
-                continue
 
-            # Draw confirmed ring candidate in green
+            # Draw inner edge in green, outer sampling boundary in cyan
+            outer_sample_ell = (ellipse[0], (ellipse[1][0] * 1.1, ellipse[1][1] * 1.1), ellipse[2])
             cv2.ellipse(debug, ellipse, (0, 255, 0), 2)
-            cv2.putText(debug, f'RING:{colour} h{hole_fill_ratio:.0%}', (cx - 20, cy - int(ellipse[1][1] / 2) - 5),
+            cv2.ellipse(debug, outer_sample_ell, (255, 255, 0), 1)
+            cv2.putText(debug, f'{colour} h{hole_fill_ratio:.0%} c{frac:.0%}', (cx - 20, cy - int(ellipse[1][1] / 2) - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            results.append(((cx, cy), patch, ellipse))
+            results.append(((cx, cy), colour, ellipse))
 
         return results, len(elps)
 
