@@ -224,8 +224,24 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     # Phase 2 — VISIT
     # ------------------------------------------------------------------
+    def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
+        """Navigate to APPROACH_DISTANCE from (x, y), play sound, and pause."""
+        dx = x - self._current_pose_x
+        dy = y - self._current_pose_y
+        dist = math.sqrt(dx * dx + dy * dy) or 0.01
+        ux, uy = dx / dist, dy / dist
+        ax = x - ux * APPROACH_DISTANCE
+        ay = y - uy * APPROACH_DISTANCE
+        yaw = math.atan2(uy, ux)
+
+        self._navigate_to(ax, ay, yaw)
+
+        self.get_logger().info(
+            f'Arrived at {label}. Announcing for {LOOK_DURATION_S}s...')
+        self._say(sound)
+        time.sleep(LOOK_DURATION_S)
+
     def _visit_rings(self) -> None:
-        # Pick the 2 rings with the most detections (highest confidence)
         sorted_rings = sorted(self._rings.values(), key=lambda r: r.count, reverse=True)
         top_rings = sorted_rings[:2]
         self.get_logger().info(
@@ -236,28 +252,12 @@ class ControllerNode(Node):
             self.get_logger().info(
                 f'Visiting ring {i+1}/{len(top_rings)}: '
                 f'{ring.colour} (n={ring.count}) at ({ring.x:.2f}, {ring.y:.2f})')
-
-            # Compute approach pose: APPROACH_DISTANCE away, facing the ring
-            dx = ring.x - self._current_pose_x
-            dy = ring.y - self._current_pose_y
-            dist = math.sqrt(dx * dx + dy * dy) or 0.01
-            ux, uy = dx / dist, dy / dist
-            ax = ring.x - ux * APPROACH_DISTANCE
-            ay = ring.y - uy * APPROACH_DISTANCE
-            yaw = math.atan2(uy, ux)
-
-            self._navigate_to(ax, ay, yaw)
-
-            self.get_logger().info(
-                f'Arrived at {ring.colour} ring. Looking for {LOOK_DURATION_S}s...')
-            self._say(ring.colour)
-            time.sleep(LOOK_DURATION_S)
+            self._approach_and_announce(ring.x, ring.y, f'{ring.colour} ring', ring.colour)
 
     # ------------------------------------------------------------------
     # Phase 3 — VISIT FACES
     # ------------------------------------------------------------------
     def _visit_faces(self) -> None:
-        # Pick the 3 faces with the most detections (highest confidence)
         sorted_faces = sorted(self._faces.values(), key=lambda f: f.count, reverse=True)
         top_faces = sorted_faces[:3]
         self.get_logger().info(
@@ -268,21 +268,7 @@ class ControllerNode(Node):
             self.get_logger().info(
                 f'Visiting face {i+1}/{len(top_faces)}: '
                 f'(n={face.count}) at ({face.x:.2f}, {face.y:.2f})')
-
-            dx = face.x - self._current_pose_x
-            dy = face.y - self._current_pose_y
-            dist = math.sqrt(dx * dx + dy * dy) or 0.01
-            ux, uy = dx / dist, dy / dist
-            ax = face.x - ux * APPROACH_DISTANCE
-            ay = face.y - uy * APPROACH_DISTANCE
-            yaw = math.atan2(uy, ux)
-
-            self._navigate_to(ax, ay, yaw)
-
-            self.get_logger().info(
-                f'Arrived at face. Greeting for {LOOK_DURATION_S}s...')
-            self._say('hello')
-            time.sleep(LOOK_DURATION_S)
+            self._approach_and_announce(face.x, face.y, 'face', 'hello')
 
     # ------------------------------------------------------------------
     # Speech
