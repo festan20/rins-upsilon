@@ -14,6 +14,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'map'), glob('map/*')),
+        (os.path.join('share', package_name, 'sounds'), glob('sounds/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -156,6 +156,13 @@ class IncrementalTrackManager:
                 return t['x'], t['y']
         return None
 
+    def get_count(self, track_id: int) -> int:
+        """Return the number of detections for a given track."""
+        for t in self._tracks:
+            if t['id'] == track_id:
+                return t['count']
+        return 0
+
     @property
     def track_count(self) -> int:
         return len(self._tracks)

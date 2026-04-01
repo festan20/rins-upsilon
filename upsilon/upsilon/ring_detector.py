@@ -230,6 +230,8 @@ class RingDetectorNode(Node):
                 continue
 
             mx, my = ps_map.point.x, ps_map.point.y
+            if colour == 'unknown':
+                continue
             track_id, is_new = self.tracker.update(mx, my, colour)
 
             # Draw colour label on debug image
@@ -238,12 +240,21 @@ class RingDetectorNode(Node):
             cv2.putText(debug, f'{colour} ({mx:.1f},{my:.1f})', (cx, cy + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, bgr_colour, 2)
 
+            count = self.tracker.get_count(track_id)
+
+            # Publish on every detection with track_id and count
+            # frame_id format: map/<colour>/<track_id>/<count>
+            ps_map.header.frame_id = f'map/{colour}/{track_id}/{count}'
+            self._ring_pub.publish(ps_map)
+
             if is_new:
                 self.get_logger().info(
                     f'New ring #{track_id} colour={colour} at map ({mx:.2f}, {my:.2f})'
                 )
-                ps_map.header.frame_id = f'map/{colour}'
-                self._ring_pub.publish(ps_map)
+            else:
+                self.get_logger().info(
+                    f'Ring #{track_id} colour={colour} count={count}',
+                    throttle_duration_sec=2.0)
 
             self._publish_markers()
 
@@ -348,12 +359,12 @@ class RingDetectorNode(Node):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
                 continue
 
-            # --- Annulus colour on ROI (1.0x to 1.2x) — widened for inner contours ---
-            ell_roi = (rc, ellipse[1], ellipse[2])
-            outer_sample_roi = (rc, (ellipse[1][0] * 1.2, ellipse[1][1] * 1.2), ellipse[2])
+            # --- Annulus colour on ROI (0.65x to 0.95x) — sample the ring body between hole and outer edge ---
+            inner_colour_roi = (rc, (ellipse[1][0] * 0.65, ellipse[1][1] * 0.65), ellipse[2])
+            outer_colour_roi = (rc, (ellipse[1][0] * 0.95, ellipse[1][1] * 0.95), ellipse[2])
             annulus_roi = np.zeros((roi_h, roi_w), dtype=np.uint8)
-            cv2.ellipse(annulus_roi, outer_sample_roi, 255, -1)
-            cv2.ellipse(annulus_roi, ell_roi, 0, -1)
+            cv2.ellipse(annulus_roi, outer_colour_roi, 255, -1)
+            cv2.ellipse(annulus_roi, inner_colour_roi, 0, -1)
 
             bgr_roi = bgr_original[roi_y1:roi_y2, roi_x1:roi_x2]
             ring_pixels = bgr_roi[annulus_roi > 0]
@@ -368,10 +379,12 @@ class RingDetectorNode(Node):
             patch = ring_pixels.reshape(-1, 1, 3)
             colour, frac = classify_colour(patch)
 
-            # Draw inner edge in green, outer sampling boundary in cyan
-            outer_sample_ell = (ellipse[0], (ellipse[1][0] * 1.1, ellipse[1][1] * 1.1), ellipse[2])
+            # Draw fitted ellipse in green, colour sampling annulus in cyan/yellow
+            inner_col_ell = (ellipse[0], (ellipse[1][0] * 0.65, ellipse[1][1] * 0.65), ellipse[2])
+            outer_col_ell = (ellipse[0], (ellipse[1][0] * 0.95, ellipse[1][1] * 0.95), ellipse[2])
             cv2.ellipse(debug, ellipse, (0, 255, 0), 2)
-            cv2.ellipse(debug, outer_sample_ell, (255, 255, 0), 1)
+            cv2.ellipse(debug, inner_col_ell, (255, 255, 0), 1)
+            cv2.ellipse(debug, outer_col_ell, (255, 255, 0), 1)
             cv2.putText(debug, f'{colour} h{hole_fill_ratio:.0%} c{frac:.0%}', (cx - 20, cy - int(ellipse[1][1] / 2) - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
@@ -383,6 +396,10 @@ class RingDetectorNode(Node):
     def _publish_markers(self) -> None:
         arr = MarkerArray()
         for track in self.tracker._tracks:
+            colour = track.get('colour', 'unknown')
+            count = track['count']
+
+            # Cylinder marker
             m = Marker()
             m.header.frame_id = 'map'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -396,9 +413,26 @@ class RingDetectorNode(Node):
             m.pose.orientation.w = 1.0
             m.scale.x = m.scale.y = 0.3
             m.scale.z = 0.05
-            colour = track.get('colour', 'unknown')
             m.color = COLOUR_RGBA.get(colour, COLOUR_RGBA['unknown'])
             arr.markers.append(m)
+
+            # Text marker showing colour and count
+            t = Marker()
+            t.header.frame_id = 'map'
+            t.header.stamp = m.header.stamp
+            t.ns = 'ring_labels'
+            t.id = track['id']
+            t.type = Marker.TEXT_VIEW_FACING
+            t.action = Marker.ADD
+            t.pose.position.x = track['x']
+            t.pose.position.y = track['y']
+            t.pose.position.z = 0.7
+            t.pose.orientation.w = 1.0
+            t.scale.z = 0.15
+            t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            t.text = f'{colour} (n={count})'
+            arr.markers.append(t)
+
         self._marker_pub.publish(arr)
 
 

@@ -15,6 +15,10 @@ launch/task1.launch.py
 map/map.pgm
 map/map.yaml
 resource/upsilon
+sounds/blue.mp3
+sounds/hello.mp3
+sounds/orange.mp3
+sounds/red.mp3
 upsilon/__init__.py
 upsilon/controller.py
 upsilon/face_detector.py
