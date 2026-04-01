@@ -186,29 +186,37 @@ class FaceDetectorNode(Node):
 
             # Deduplicate
             track_id, is_new = self.tracker.update(mx, my)
+            count = self.tracker.get_count(track_id)
+
+            # Publish on every detection: frame_id = map/<track_id>/<count>
+            det = PointStamped()
+            det.header.frame_id = f'map/{track_id}/{count}'
+            det.header.stamp = msg.header.stamp
+            det.point.x = mx
+            det.point.y = my
+            det.point.z = mz
+            self._face_pub.publish(det)
 
             if is_new:
                 self.get_logger().info(
                     f'NEW FACE #{track_id} at map ({mx:.2f}, {my:.2f}, {mz:.2f})'
                 )
-                # Publish detection
-                det = PointStamped()
-                det.header.frame_id = 'map'
-                det.header.stamp = msg.header.stamp
-                det.point.x = mx
-                det.point.y = my
-                det.point.z = mz
-                self._face_pub.publish(det)
+            else:
+                self.get_logger().info(
+                    f'Face #{track_id} count={count}',
+                    throttle_duration_sec=2.0)
 
         self._publish_markers()
 
     def _publish_markers(self) -> None:
         """Republish markers for ALL tracked faces."""
         arr = MarkerArray()
+        now = self.get_clock().now().to_msg()
         for track in self.tracker._tracks:
+            # Sphere marker
             m = Marker()
             m.header.frame_id = 'map'
-            m.header.stamp = self.get_clock().now().to_msg()
+            m.header.stamp = now
             m.ns = 'faces'
             m.id = track['id']
             m.type = Marker.SPHERE
@@ -222,6 +230,23 @@ class FaceDetectorNode(Node):
             m.scale.z = 0.15
             m.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
             arr.markers.append(m)
+
+            # Text label with count
+            t = Marker()
+            t.header.frame_id = 'map'
+            t.header.stamp = now
+            t.ns = 'face_labels'
+            t.id = track['id']
+            t.type = Marker.TEXT_VIEW_FACING
+            t.action = Marker.ADD
+            t.pose.position.x = track['x']
+            t.pose.position.y = track['y']
+            t.pose.position.z = 0.7
+            t.pose.orientation.w = 1.0
+            t.scale.z = 0.15
+            t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            t.text = f'face (n={track["count"]})'
+            arr.markers.append(t)
         self._marker_pub.publish(arr)
 
 

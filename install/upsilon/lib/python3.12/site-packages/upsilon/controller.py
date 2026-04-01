@@ -88,9 +88,11 @@ class Ring:
 
 
 class Face:
-    def __init__(self, x: float, y: float):
+    def __init__(self, x: float, y: float, track_id: int = -1, count: int = 1):
         self.x = x
         self.y = y
+        self.track_id = track_id
+        self.count = count
 
 
 class ControllerNode(Node):
@@ -125,8 +127,8 @@ class ControllerNode(Node):
 
         # Detected rings keyed by track_id (updated with latest position/count)
         self._rings: dict[int, Ring] = {}
-        # Detected faces (already deduplicated by detector)
-        self._faces: list[Face] = []
+        # Detected faces keyed by track_id (updated with latest position/count)
+        self._faces: dict[int, Face] = {}
 
         # Nav/spin async state (set by callbacks)
         self._nav_goal_handle   = None
@@ -161,9 +163,15 @@ class ControllerNode(Node):
 
     def _face_cb(self, msg: PointStamped) -> None:
         x, y = msg.point.x, msg.point.y
-        self._faces.append(Face(x, y))
+        # frame_id format: map/<track_id>/<count>
+        parts = msg.header.frame_id.split('/')
+        track_id = int(parts[1]) if len(parts) >= 2 else -1
+        count = int(parts[2]) if len(parts) >= 3 else 1
+
+        self._faces[track_id] = Face(x, y, track_id, count)
         self.get_logger().info(
-            f'Face buffered at ({x:.2f}, {y:.2f}) — total: {len(self._faces)}')
+            f'Face #{track_id} count={count} at ({x:.2f}, {y:.2f}) '
+            f'— {len(self._faces)} unique tracks')
         self._publish_face_markers()
 
     # ------------------------------------------------------------------
@@ -193,8 +201,18 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     # Phase 1 — EXPLORE
     # ------------------------------------------------------------------
+    def _exploration_complete(self) -> bool:
+        if len(self._faces) < 3 or len(self._rings) < 2:
+            return False
+        top_faces = sorted(self._faces.values(), key=lambda f: f.count, reverse=True)[:3]
+        top_rings = sorted(self._rings.values(), key=lambda r: r.count, reverse=True)[:2]
+        return all(f.count > 15 for f in top_faces) and all(r.count > 15 for r in top_rings)
+
     def _explore(self) -> None:
         for i, wp in enumerate(EXPLORATION_WAYPOINTS):
+            if self._exploration_complete():
+                self.get_logger().info('All targets found with sufficient detections. Stopping exploration.')
+                break
             self.get_logger().info(
                 f'Waypoint {i+1}/{len(EXPLORATION_WAYPOINTS)} '
                 f'({wp[0]:.1f}, {wp[1]:.1f})')
@@ -206,8 +224,24 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     # Phase 2 — VISIT
     # ------------------------------------------------------------------
+    def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
+        """Navigate to APPROACH_DISTANCE from (x, y), play sound, and pause."""
+        dx = x - self._current_pose_x
+        dy = y - self._current_pose_y
+        dist = math.sqrt(dx * dx + dy * dy) or 0.01
+        ux, uy = dx / dist, dy / dist
+        ax = x - ux * APPROACH_DISTANCE
+        ay = y - uy * APPROACH_DISTANCE
+        yaw = math.atan2(uy, ux)
+
+        self._navigate_to(ax, ay, yaw)
+
+        self.get_logger().info(
+            f'Arrived at {label}. Announcing for {LOOK_DURATION_S}s...')
+        self._say(sound)
+        time.sleep(LOOK_DURATION_S)
+
     def _visit_rings(self) -> None:
-        # Pick the 2 rings with the most detections (highest confidence)
         sorted_rings = sorted(self._rings.values(), key=lambda r: r.count, reverse=True)
         top_rings = sorted_rings[:2]
         self.get_logger().info(
@@ -218,46 +252,23 @@ class ControllerNode(Node):
             self.get_logger().info(
                 f'Visiting ring {i+1}/{len(top_rings)}: '
                 f'{ring.colour} (n={ring.count}) at ({ring.x:.2f}, {ring.y:.2f})')
-
-            # Compute approach pose: APPROACH_DISTANCE away, facing the ring
-            dx = ring.x - self._current_pose_x
-            dy = ring.y - self._current_pose_y
-            dist = math.sqrt(dx * dx + dy * dy) or 0.01
-            ux, uy = dx / dist, dy / dist
-            ax = ring.x - ux * APPROACH_DISTANCE
-            ay = ring.y - uy * APPROACH_DISTANCE
-            yaw = math.atan2(uy, ux)
-
-            self._navigate_to(ax, ay, yaw)
-
-            self.get_logger().info(
-                f'Arrived at {ring.colour} ring. Looking for {LOOK_DURATION_S}s...')
-            self._say(ring.colour)
-            time.sleep(LOOK_DURATION_S)
+            self._approach_and_announce(ring.x, ring.y, f'{ring.colour} ring', ring.colour)
 
     # ------------------------------------------------------------------
     # Phase 3 — VISIT FACES
     # ------------------------------------------------------------------
     def _visit_faces(self) -> None:
-        for i, face in enumerate(self._faces):
+        sorted_faces = sorted(self._faces.values(), key=lambda f: f.count, reverse=True)
+        top_faces = sorted_faces[:3]
+        self.get_logger().info(
+            f'Selecting top {len(top_faces)} faces by count: '
+            + ', '.join(f'#{f.track_id} (n={f.count})' for f in top_faces))
+
+        for i, face in enumerate(top_faces):
             self.get_logger().info(
-                f'Visiting face {i+1}/{len(self._faces)}: '
-                f'at ({face.x:.2f}, {face.y:.2f})')
-
-            dx = face.x - self._current_pose_x
-            dy = face.y - self._current_pose_y
-            dist = math.sqrt(dx * dx + dy * dy) or 0.01
-            ux, uy = dx / dist, dy / dist
-            ax = face.x - ux * APPROACH_DISTANCE
-            ay = face.y - uy * APPROACH_DISTANCE
-            yaw = math.atan2(uy, ux)
-
-            self._navigate_to(ax, ay, yaw)
-
-            self.get_logger().info(
-                f'Arrived at face. Greeting for {LOOK_DURATION_S}s...')
-            self._say('hello')
-            time.sleep(LOOK_DURATION_S)
+                f'Visiting face {i+1}/{len(top_faces)}: '
+                f'(n={face.count}) at ({face.x:.2f}, {face.y:.2f})')
+            self._approach_and_announce(face.x, face.y, 'face', 'hello')
 
     # ------------------------------------------------------------------
     # Speech
@@ -397,12 +408,12 @@ class ControllerNode(Node):
     def _publish_face_markers(self) -> None:
         now = self.get_clock().now().to_msg()
         arr = MarkerArray()
-        for i, face in enumerate(self._faces):
+        for face in self._faces.values():
             m = Marker()
             m.header.frame_id = 'map'
             m.header.stamp    = now
             m.ns     = 'detected_faces'
-            m.id     = i
+            m.id     = face.track_id
             m.type   = Marker.SPHERE
             m.action = Marker.ADD
             m.pose.position.x = face.x

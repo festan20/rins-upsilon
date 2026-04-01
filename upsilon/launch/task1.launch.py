@@ -31,7 +31,7 @@ from launch_ros.actions import Node
 ARGUMENTS = [
     DeclareLaunchArgument(
         'world',
-        default_value='task1_blue_demo',
+        default_value='task1',
         description='Gazebo world name (without .sdf). '
                     'Options: task1_blue_demo, task1_green_demo, task1_yellow_demo',
     ),
