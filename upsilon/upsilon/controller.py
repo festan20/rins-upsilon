@@ -201,8 +201,18 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     # Phase 1 — EXPLORE
     # ------------------------------------------------------------------
+    def _exploration_complete(self) -> bool:
+        if len(self._faces) < 3 or len(self._rings) < 2:
+            return False
+        top_faces = sorted(self._faces.values(), key=lambda f: f.count, reverse=True)[:3]
+        top_rings = sorted(self._rings.values(), key=lambda r: r.count, reverse=True)[:2]
+        return all(f.count > 15 for f in top_faces) and all(r.count > 15 for r in top_rings)
+
     def _explore(self) -> None:
         for i, wp in enumerate(EXPLORATION_WAYPOINTS):
+            if self._exploration_complete():
+                self.get_logger().info('All targets found with sufficient detections. Stopping exploration.')
+                break
             self.get_logger().info(
                 f'Waypoint {i+1}/{len(EXPLORATION_WAYPOINTS)} '
                 f'({wp[0]:.1f}, {wp[1]:.1f})')
