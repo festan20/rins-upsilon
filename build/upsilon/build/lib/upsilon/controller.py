@@ -36,30 +36,28 @@ from rclpy.qos import (
 
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 
-# ---------------------------------------------------------------------------
-# Tuning parameters
-# ---------------------------------------------------------------------------
-APPROACH_DISTANCE  = 0.7    # metres — stop this far from a ring
-LOOK_DURATION_S    = 3.0    # seconds to pause looking at a ring
-NAV_TIMEOUT_S      = 30.0   # give up on a nav goal after this long
-SPIN_TIMEOUT_S     = 20.0   # give up on a spin after this long
-POLL_INTERVAL_S    = 0.3    # sleep between blocking polls
-
-# Coverage waypoints [x, y, yaw_rad] in map frame.
+# --------------------------------------------------------------------------
+# Tuing parameters
+# --------------------------------------------------------------------------
+APPRACH_DISTANCE  = 0.7    # metres — stop this far from a ring
+LOOKDURATION_S    = 3.0    # seconds to pause looking at a ring
+NAV_IMEOUT_S      = 30.0   # give up on a nav goal after this long
+SPINTIMEOUT_S     = 20.0   # give up on a spin after this long
+POLLINTERVAL_S    = 0.3    # sleep between blocking polls
+# Coerage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
-    (2.0,  -0.4,  0.0),
-    (2.0,  -2.2,  0.0),
-    (0.6,  -3.7,  0.0),
-    (0.0,   -2.0, 0.0),
-    (-1.6,  -1.0, 0.0),
-    (-2.2,   0.7, 0.0),
-    (-2.3,   2.5, 0.0),
-    (0.6,    2.6, 0.0),
-    (1.0,   1.6, 0.0),
-    (-0.5,   1.2,  0.0),
-    (-1.6,  -1.0,  0.0),
+    #(2.0,  -0.4,  0.0),
+    #(2.0,  -2.2,  0.0),
+    #(0.6,  -3.7,  0.0),
+    #(0.0,   -2.0, 0.0),
+    #(-1.6,  -1.0, 0.0),
+    #(-2.2,   0.7, 0.0),
+    #(-2.3,   2.5, 0.0),
+    #(0.6,    2.6, 0.0),
+    #(1.0,   1.6, 0.0),
+    #(-0.5,   1.2,  0.0),
+    #(-1.6,  -1.0,  0.0),
 ]
-
 _COLOUR_RGBA: dict[str, ColorRGBA] = {
     'blue':    ColorRGBA(r=0.0, g=0.3, b=1.0, a=1.0),
     'green':   ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0),
@@ -218,8 +216,8 @@ class ControllerNode(Node):
                 f'({wp[0]:.1f}, {wp[1]:.1f})')
 
             self._navigate_to(*wp)
-            self.get_logger().info('Waypoint reached, spinning 360°')
-            self._spin_360()
+            # self.get_logger().info('Waypoint reached, spinning 360°')
+            # self._spin_360()
 
     # ------------------------------------------------------------------
     # Phase 2 — VISIT
