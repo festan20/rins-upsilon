@@ -133,7 +133,7 @@ def generate_launch_description():
     # ------------------------------------------------------------------
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([pkg_dis_tutorial3, 'launch', 'localization.launch.py'])
+            PathJoinSubstitution([pkg_upsilon, 'launch', 'localization.launch.py'])
         ),
         launch_arguments=[
             ('namespace',    LaunchConfiguration('namespace')),
