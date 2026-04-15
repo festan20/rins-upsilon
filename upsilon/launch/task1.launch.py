@@ -141,6 +141,7 @@ def generate_launch_description():
         launch_arguments=[
             ('namespace',    LaunchConfiguration('namespace')),
             ('use_sim_time', LaunchConfiguration('use_sim_time')),
+            ('params_file',  PathJoinSubstitution([pkg_upsilon, 'config', 'nav2.yaml'])),
         ],
     )
 

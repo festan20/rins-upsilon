@@ -218,8 +218,8 @@ class ControllerNode(Node):
                 f'({wp[0]:.1f}, {wp[1]:.1f})')
 
             self._navigate_to(*wp)
-            self.get_logger().info('Waypoint reached, spinning 360°')
-            self._spin_360()
+            # self.get_logger().info('Waypoint reached, spinning 360°')
+            # self._spin_360()
 
     # ------------------------------------------------------------------
     # Phase 2 — VISIT
