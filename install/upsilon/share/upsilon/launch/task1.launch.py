@@ -74,7 +74,8 @@ def generate_launch_description():
     # gazebo = IncludeLaunchDescription(
     #     PythonLaunchDescriptionSource(
     #         PathJoinSubstitution([pkg_dis_tutorial3, 'launch', 'sim.launch.py'])
-    #     ),
+    #     ),From 192.168.0.106 icmp_seq=3 Destination Host Unreachable
+
     #     launch_arguments=[
     #         ('world',        LaunchConfiguration('world')),
     #         ('model',        LaunchConfiguration('model')),
@@ -110,7 +111,22 @@ def generate_launch_description():
         name='rviz2',
         output='screen',
         arguments=['-d', PathJoinSubstitution([pkg_upsilon, 'config', 'upsilon.rviz'])],
-        parameters=[{'use_sim_time': 'false'}],
+        parameters=[{'use_sim_time': False}],
+    )
+
+    # ------------------------------------------------------------------
+    # 2c. Laser filter — converts /scan → /scan_filtered
+    #     (AMCL subscribes to scan_filtered, see localization.yaml)
+    # ------------------------------------------------------------------
+    laser_filter = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='scan_to_scan_filter_chain',
+        output='screen',
+        parameters=[
+            PathJoinSubstitution([pkg_dis_tutorial3, 'config', 'laser_filter_chain.yaml']),
+            {'use_sim_time': False},
+        ],
     )
 
     # ------------------------------------------------------------------
@@ -118,12 +134,13 @@ def generate_launch_description():
     # ------------------------------------------------------------------
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([pkg_dis_tutorial3, 'launch', 'localization.launch.py'])
+            PathJoinSubstitution([pkg_upsilon, 'launch', 'localization.launch.py'])
         ),
         launch_arguments=[
             ('namespace',    LaunchConfiguration('namespace')),
             ('use_sim_time', 'false'),
             ('map',          PathJoinSubstitution([pkg_upsilon, 'map', 'realMap.yaml'])),
+            ('params',       PathJoinSubstitution([pkg_upsilon, 'config', 'localization.yaml'])),
         ],
     )
 
@@ -151,16 +168,25 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'device': ''},
-            {'use_sim_time': 'false'},
+            {'use_sim_time': False},
         ],
     )
 
     ring_detector = Node(
         package='upsilon',
-        executable='ring_detector',
-        name='ring_detector',
+        executable='ring_detector2',
+        name='ring_detector2',
         output='screen',
-        parameters=[{'use_sim_time': 'false'}],
+        parameters=[{'use_sim_time': False}],
+        # Remap v2 topics so existing downstream subscribers (controller,
+        # camera_viewer, RViz) keep working unchanged.
+        remappings=[
+            ('/ring_detector2/debug',     '/ring_detector/debug'),
+            ('/ring_detector2/threshold', '/ring_detector/threshold'),
+            ('/ring_detector2/contour',   '/ring_detector/contour'),
+            ('/detected_rings2',          '/detected_rings'),
+            ('/ring_markers2',            '/ring_markers'),
+        ],
     )
 
     speech = Node(
@@ -175,7 +201,7 @@ def generate_launch_description():
         executable='controller',
         name='controller',
         output='screen',
-        parameters=[{'use_sim_time': 'false'}],
+        parameters=[{'use_sim_time': False}],
     )
 
     visualizer = Node(
@@ -183,7 +209,7 @@ def generate_launch_description():
         executable='visualizer',
         name='visualizer',
         output='screen',
-        parameters=[{'use_sim_time': 'false'}],
+        parameters=[{'use_sim_time': False}],
     )
 
     # ------------------------------------------------------------------
@@ -191,6 +217,7 @@ def generate_launch_description():
     # ld.add_action(gazebo)       # DISABLED — real robot
     # ld.add_action(robot_spawn)  # DISABLED — real robot
     ld.add_action(rviz2)
+    ld.add_action(laser_filter)
     ld.add_action(localization)
     ld.add_action(nav2)
     ld.add_action(face_detector)

@@ -37,15 +37,20 @@ from rclpy.qos import (
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 
 # --------------------------------------------------------------------------
-# Tuing parameters
+# Tuning parameters
 # --------------------------------------------------------------------------
-APPRACH_DISTANCE  = 0.7    # metres — stop this far from a ring
-LOOKDURATION_S    = 3.0    # seconds to pause looking at a ring
-NAV_IMEOUT_S      = 30.0   # give up on a nav goal after this long
-SPINTIMEOUT_S     = 20.0   # give up on a spin after this long
-POLLINTERVAL_S    = 0.3    # sleep between blocking polls
+APPROACH_DISTANCE = 0.7    # metres — stop this far from a ring
+LOOK_DURATION_S   = 3.0    # seconds to pause looking at a ring
+NAV_TIMEOUT_S     = 30.0   # give up on a nav goal after this long
+SPIN_TIMEOUT_S    = 20.0   # give up on a spin after this long
+POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
 # Coerage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
+    (0.88, 2.0, 0.0),
+    (-0.2, 2.5, 0.0),
+    (-1.6, 2.0, 0.0),
+    (-2.5, 1.42, 0.0)    
+    
     #(2.0,  -0.4,  0.0),
     #(2.0,  -2.2,  0.0),
     #(0.6,  -3.7,  0.0),

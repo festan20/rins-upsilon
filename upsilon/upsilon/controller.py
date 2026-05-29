@@ -12,17 +12,14 @@ fire while the mission thread blocks.
 """
 
 import math
-import os
 import threading
 import time
-
-from ament_index_python.packages import get_package_share_directory
-from playsound import playsound
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion
 from geometry_msgs.msg import PointStamped
 from nav2_msgs.action import NavigateToPose, Spin
-from std_msgs.msg import ColorRGBA
+from nav_msgs.msg import OccupancyGrid
+from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 import rclpy
@@ -33,19 +30,41 @@ from rclpy.node import Node
 from rclpy.qos import (
     QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
 )
+from std_srvs.srv import SetBool
 
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 
 # --------------------------------------------------------------------------
-# Tuing parameters
+# Tuning parameters
 # --------------------------------------------------------------------------
-APPRACH_DISTANCE  = 0.7    # metres — stop this far from a ring
-LOOKDURATION_S    = 3.0    # seconds to pause looking at a ring
-NAV_IMEOUT_S      = 30.0   # give up on a nav goal after this long
-SPINTIMEOUT_S     = 20.0   # give up on a spin after this long
-POLLINTERVAL_S    = 0.3    # sleep between blocking polls
-# Coerage waypoints [x, y, yaw_rad] in map frame.
+APPROACH_DISTANCE = 0.5    # metres — stop this far from a ring
+LOOK_DURATION_S   = 5.0    # seconds to pause looking at a ring (also lets TTS finish)
+NAV_TIMEOUT_S     = 30.0   # give up on a nav goal after this long
+SPIN_TIMEOUT_S    = 20.0   # give up on a spin after this long
+POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
+APPROACH_CANDIDATES = 24   # how many angles to try around the target
+NUM_FACES_TO_VISIT = 3     # target number of faces to visit
+NUM_RINGS_TO_VISIT = 2     # target number of rings to visit
+# Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
+    #Task2
+    (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
+
+    
+    # Real robot waypoints
+    #(1.7515618801116943,  2.5002310276031494,  0.0),
+    #(0.7185518741607666, 1.8272650241851807, 1.5),
+    #(-1.4692095041275024, 2.340272617340088,   -1.5),
+    #(-1.511810541152954, 1.9055171012878418,  3.0),
+
+
+    # Previous sets — kept for reference
+   # (0.88, 2.0, 0.0),
+   #
+   # (-0.2, 2.5, 0.0),
+   # (-1.6, 2.0, 0.0),
+    #(-2.5, 1.42, 0.0)
+
     #(2.0,  -0.4,  0.0),
     #(2.0,  -2.2,  0.0),
     #(0.6,  -3.7,  0.0),
@@ -59,6 +78,7 @@ EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #(-1.6,  -1.0,  0.0),
 ]
 _COLOUR_RGBA: dict[str, ColorRGBA] = {
+    'red':     ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0),
     'blue':    ColorRGBA(r=0.0, g=0.3, b=1.0, a=1.0),
     'green':   ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0),
     'yellow':  ColorRGBA(r=1.0, g=1.0, b=0.0, a=1.0),
@@ -76,20 +96,66 @@ amcl_qos = QoSProfile(
 )
 
 
+class CostmapChecker:
+    """Subscribes to /global_costmap/costmap and exposes is_free(x, y).
+
+    A cell is considered free when its cost is below `threshold` (0–99) and
+    is not -1 (unknown). If no costmap has been received yet, every query
+    returns True so behaviour falls back to the naive approach.
+    """
+
+    def __init__(self, node: Node, topic: str = '/global_costmap/costmap'):
+        self._data: tuple | None = None
+        self._origin_x = 0.0
+        self._origin_y = 0.0
+        self._resolution = 0.05
+        self._width = 0
+        self._height = 0
+        qos = QoSProfile(
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        node.create_subscription(OccupancyGrid, topic, self._cb, qos)
+
+    def _cb(self, msg: OccupancyGrid) -> None:
+        self._data = msg.data
+        self._origin_x = msg.info.origin.position.x
+        self._origin_y = msg.info.origin.position.y
+        self._resolution = msg.info.resolution
+        self._width = msg.info.width
+        self._height = msg.info.height
+
+    def is_free(self, x: float, y: float, threshold: int = 50) -> bool:
+        if self._data is None:
+            return True
+        col = int((x - self._origin_x) / self._resolution)
+        row = int((y - self._origin_y) / self._resolution)
+        if not (0 <= col < self._width and 0 <= row < self._height):
+            return False
+        val = self._data[row * self._width + col]
+        return 0 <= val < threshold
+
+
 class Ring:
-    def __init__(self, x: float, y: float, colour: str, track_id: int = -1, count: int = 1):
+    def __init__(self, x: float, y: float, colour: str, track_id: int = -1,
+                 count: int = 1, seen_order: int = 0):
         self.x = x
         self.y = y
         self.colour = colour
         self.track_id = track_id
         self.count = count
+        self.seen_order = seen_order  # global discovery index (higher = seen later)
 
 
 class Face:
-    def __init__(self, x: float, y: float, track_id: int = -1, count: int = 1):
+    def __init__(self, x: float, y: float, track_id: int = -1, count: int = 1,
+                 seen_order: int = 0):
         self.x = x
         self.y = y
         self.track_id = track_id
+        self.seen_order = seen_order  # global discovery index (higher = seen later)
         self.count = count
 
 
@@ -104,12 +170,18 @@ class ControllerNode(Node):
                                          callback_group=self._cbg)
         self._spin_client = ActionClient(self, Spin, 'spin',
                                          callback_group=self._cbg)
+        self._blue_line_client = self.create_client(SetBool, '/blue_line/set_active')
 
         # Publishers
         self._ring_markers_pub = self.create_publisher(
             MarkerArray, '/explore_ring_markers', 10)
         self._face_markers_pub = self.create_publisher(
             MarkerArray, '/explore_face_markers', 10)
+        # TurtleBot4 onboard TTS listens on /speak
+        self._speak_pub = self.create_publisher(String, '/speak', 10)
+
+        # Global costmap reader — used to pick free approach poses
+        self._costmap = CostmapChecker(self)
 
         # Subscribers
         self.create_subscription(PointStamped, '/detected_rings',
@@ -127,6 +199,9 @@ class ControllerNode(Node):
         self._rings: dict[int, Ring] = {}
         # Detected faces keyed by track_id (updated with latest position/count)
         self._faces: dict[int, Face] = {}
+        # Global discovery counter — shared by faces and rings so we have a
+        # single timeline of "what was seen when".
+        self._discovery_counter = 0
 
         # Nav/spin async state (set by callbacks)
         self._nav_goal_handle   = None
@@ -153,7 +228,14 @@ class ControllerNode(Node):
         track_id = int(parts[2]) if len(parts) >= 3 else -1
         count = int(parts[3]) if len(parts) >= 4 else 1
 
-        self._rings[track_id] = Ring(x, y, colour, track_id, count)
+        # Preserve discovery order for known tracks; assign next index for new ones
+        if track_id in self._rings:
+            seen_order = self._rings[track_id].seen_order
+        else:
+            seen_order = self._discovery_counter
+            self._discovery_counter += 1
+
+        self._rings[track_id] = Ring(x, y, colour, track_id, count, seen_order)
         self.get_logger().info(
             f'Ring #{track_id} ({colour}) count={count} at ({x:.2f}, {y:.2f}) '
             f'— {len(self._rings)} unique tracks')
@@ -166,7 +248,14 @@ class ControllerNode(Node):
         track_id = int(parts[1]) if len(parts) >= 2 else -1
         count = int(parts[2]) if len(parts) >= 3 else 1
 
-        self._faces[track_id] = Face(x, y, track_id, count)
+        # Preserve discovery order for known tracks; assign next index for new ones
+        if track_id in self._faces:
+            seen_order = self._faces[track_id].seen_order
+        else:
+            seen_order = self._discovery_counter
+            self._discovery_counter += 1
+
+        self._faces[track_id] = Face(x, y, track_id, count, seen_order)
         self.get_logger().info(
             f'Face #{track_id} count={count} at ({x:.2f}, {y:.2f}) '
             f'— {len(self._faces)} unique tracks')
@@ -177,24 +266,13 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     def _run_mission(self) -> None:
         self._wait_for_nav2()
-        self.get_logger().info('Nav2 is up. Starting exploration.')
+        self.get_logger().info('Nav2 is up. Driving to blue-line start checkpoint.')
 
         self._explore()
-
-        self.get_logger().info(
-            f'Exploration done. {len(self._rings)} ring tracks detected.')
-
-        if self._faces:
-            self._visit_faces()
+        if self._activate_blue_line_following():
+            self.get_logger().info('Blue-line follower activated. Controller mission handoff complete.')
         else:
-            self.get_logger().info('No faces found.')
-
-        if self._rings:
-            self._visit_rings()
-        else:
-            self.get_logger().info('No rings found.')
-
-        self.get_logger().info('Mission complete.')
+            self.get_logger().error('Blue-line follower activation failed. Not running legacy face/ring visit logic.')
 
     # ------------------------------------------------------------------
     # Phase 1 — EXPLORE
@@ -208,9 +286,6 @@ class ControllerNode(Node):
 
     def _explore(self) -> None:
         for i, wp in enumerate(EXPLORATION_WAYPOINTS):
-            if self._exploration_complete():
-                self.get_logger().info('All targets found with sufficient detections. Stopping exploration.')
-                break
             self.get_logger().info(
                 f'Waypoint {i+1}/{len(EXPLORATION_WAYPOINTS)} '
                 f'({wp[0]:.1f}, {wp[1]:.1f})')
@@ -219,19 +294,84 @@ class ControllerNode(Node):
             # self.get_logger().info('Waypoint reached, spinning 360°')
             # self._spin_360()
 
+    def _activate_blue_line_following(self) -> bool:
+        """Enable blue-line follower runtime mode via service call."""
+        if not self._blue_line_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('/blue_line/set_active service not available.')
+            return False
+
+        req = SetBool.Request()
+        req.data = True
+        future = self._blue_line_client.call_async(req)
+
+        t0 = time.monotonic()
+        while not future.done():
+            time.sleep(POLL_INTERVAL_S)
+            if time.monotonic() - t0 > 10.0:
+                self.get_logger().error('Timed out while enabling blue-line follower.')
+                return False
+
+        try:
+            res = future.result()
+        except Exception as exc:  # pragma: no cover - defensive runtime logging
+            self.get_logger().error(f'Failed to enable blue-line follower: {exc}')
+            return False
+
+        if not res.success:
+            self.get_logger().error(f'Blue-line follower refused activation: {res.message}')
+            return False
+
+        self.get_logger().info(f'Blue-line activation response: {res.message}')
+        return True
+
     # ------------------------------------------------------------------
     # Phase 2 — VISIT
     # ------------------------------------------------------------------
-    def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
-        """Navigate to APPROACH_DISTANCE from (x, y), play sound, and pause."""
-        dx = x - self._current_pose_x
-        dy = y - self._current_pose_y
-        dist = math.sqrt(dx * dx + dy * dy) or 0.01
-        ux, uy = dx / dist, dy / dist
-        ax = x - ux * APPROACH_DISTANCE
-        ay = y - uy * APPROACH_DISTANCE
-        yaw = math.atan2(uy, ux)
+    def _find_approach_pose(self, target_x: float, target_y: float
+                            ) -> tuple[float, float, float]:
+        """Pick an approach pose APPROACH_DISTANCE from the target, facing it.
 
+        Samples ``APPROACH_CANDIDATES`` points on a ring around the target,
+        starting from the side closest to the robot, then fanning out.
+        Returns the first one whose cell is free in the global costmap.
+        If nothing is free (or the costmap hasn't arrived yet) it falls back
+        to the natural-side point. ``yaw`` is always set so the robot faces
+        the target.
+        """
+        dx = self._current_pose_x - target_x
+        dy = self._current_pose_y - target_y
+        base_angle = math.atan2(dy, dx)  # direction target → robot
+
+        step = 2.0 * math.pi / APPROACH_CANDIDATES
+        # Interleaved fan-out: 0, +step, -step, +2*step, -2*step, ...
+        angles = [base_angle]
+        for k in range(1, APPROACH_CANDIDATES // 2 + 1):
+            angles.append(base_angle + k * step)
+            angles.append(base_angle - k * step)
+
+        for angle in angles:
+            ax = target_x + APPROACH_DISTANCE * math.cos(angle)
+            ay = target_y + APPROACH_DISTANCE * math.sin(angle)
+            if self._costmap.is_free(ax, ay):
+                yaw = math.atan2(target_y - ay, target_x - ax)
+                self.get_logger().info(
+                    f'Approach pose at ({ax:.2f}, {ay:.2f}), '
+                    f'angle={math.degrees(angle):+.0f}°, '
+                    f'yaw={math.degrees(yaw):+.0f}°'
+                )
+                return ax, ay, yaw
+
+        # Every candidate blocked — fall back to natural side anyway
+        self.get_logger().warn(
+            'No free approach pose around target; using natural side.')
+        ax = target_x + APPROACH_DISTANCE * math.cos(base_angle)
+        ay = target_y + APPROACH_DISTANCE * math.sin(base_angle)
+        yaw = math.atan2(target_y - ay, target_x - ax)
+        return ax, ay, yaw
+
+    def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
+        """Navigate to APPROACH_DISTANCE from (x, y), face it, speak, and pause."""
+        ax, ay, yaw = self._find_approach_pose(x, y)
         self._navigate_to(ax, ay, yaw)
 
         self.get_logger().info(
@@ -239,55 +379,67 @@ class ControllerNode(Node):
         self._say(sound)
         time.sleep(LOOK_DURATION_S)
 
-    def _visit_rings(self) -> None:
-        sorted_rings = sorted(self._rings.values(), key=lambda r: r.count, reverse=True)
-        top_rings = sorted_rings[:2]
-        self.get_logger().info(
-            f'Selecting top {len(top_rings)} rings by count: '
-            + ', '.join(f'#{r.track_id} {r.colour} (n={r.count})' for r in top_rings))
+    def _visit_targets(self) -> None:
+        """Visit NUM_FACES_TO_VISIT faces and NUM_RINGS_TO_VISIT rings.
 
-        for i, ring in enumerate(top_rings):
+        Re-scans the detection dicts before every visit so targets detected
+        late (during the visit phase) still get picked up. Each iteration it
+        picks the most recently discovered target (highest seen_order, a
+        global index shared by faces and rings) that hasn't been visited yet.
+        Stops once both quotas are met, or when no unvisited target remains.
+        """
+        visited_faces: set[int] = set()
+        visited_rings: set[int] = set()
+
+        while True:
+            need_faces = len(visited_faces) < NUM_FACES_TO_VISIT
+            need_rings = len(visited_rings) < NUM_RINGS_TO_VISIT
+            if not need_faces and not need_rings:
+                break  # both quotas met
+
+            # Re-scan: collect unvisited targets of the kinds still needed
+            candidates: list[tuple[str, object]] = []
+            if need_faces:
+                candidates += [('face', f) for f in self._faces.values()
+                               if f.track_id not in visited_faces]
+            if need_rings:
+                candidates += [('ring', r) for r in self._rings.values()
+                               if r.track_id not in visited_rings]
+
+            if not candidates:
+                self.get_logger().warn(
+                    f'No more targets to visit — visited '
+                    f'{len(visited_faces)}/{NUM_FACES_TO_VISIT} faces, '
+                    f'{len(visited_rings)}/{NUM_RINGS_TO_VISIT} rings.')
+                break
+
+            # Most recently discovered first (global order across faces+rings)
+            kind, target = max(candidates, key=lambda kv: kv[1].seen_order)
+
+            if kind == 'face':
+                label, phrase = 'face', 'Hello'
+                visited_faces.add(target.track_id)
+            else:
+                label = f'{target.colour} ring'
+                phrase = f'{target.colour} ring'
+                visited_rings.add(target.track_id)
+
             self.get_logger().info(
-                f'Visiting ring {i+1}/{len(top_rings)}: '
-                f'{ring.colour} (n={ring.count}) at ({ring.x:.2f}, {ring.y:.2f})')
-            self._approach_and_announce(ring.x, ring.y, f'{ring.colour} ring', ring.colour)
+                f'Visiting {label} #{target.track_id} (n={target.count}) '
+                f'at ({target.x:.2f}, {target.y:.2f}) — '
+                f'{len(visited_faces)}/{NUM_FACES_TO_VISIT} faces, '
+                f'{len(visited_rings)}/{NUM_RINGS_TO_VISIT} rings')
+            self._approach_and_announce(target.x, target.y, label, phrase)
 
     # ------------------------------------------------------------------
-    # Phase 3 — VISIT FACES
+    # Speech (TurtleBot4 onboard TTS listens on /speak)
     # ------------------------------------------------------------------
-    def _visit_faces(self) -> None:
-        sorted_faces = sorted(self._faces.values(), key=lambda f: f.count, reverse=True)
-        top_faces = sorted_faces[:3]
-        self.get_logger().info(
-            f'Selecting top {len(top_faces)} faces by count: '
-            + ', '.join(f'#{f.track_id} (n={f.count})' for f in top_faces))
-
-        for i, face in enumerate(top_faces):
-            self.get_logger().info(
-                f'Visiting face {i+1}/{len(top_faces)}: '
-                f'(n={face.count}) at ({face.x:.2f}, {face.y:.2f})')
-            self._approach_and_announce(face.x, face.y, 'face', 'hello')
-
-    # ------------------------------------------------------------------
-    # Speech
-    # ------------------------------------------------------------------
-    _SOUNDS_DIR = os.path.join(
-        get_package_share_directory('upsilon'), 'sounds')
-
-    def _say(self, colour: str) -> None:
-        """Play the mp3 for a given ring colour (non-blocking)."""
-        path = os.path.join(self._SOUNDS_DIR, f'{colour}.mp3')
-        if not os.path.isfile(path):
-            self.get_logger().warn(f'No sound file: {path}')
-            return
-
-        def _play():
-            try:
-                self.get_logger().info(f'Playing sound: {path}')
-                playsound(path)
-            except Exception as e:
-                self.get_logger().warn(f'Playsound failed: {e}')
-        threading.Thread(target=_play, daemon=True).start()
+    def _say(self, phrase: str) -> None:
+        """Publish a phrase for the robot's onboard TTS to speak."""
+        msg = String()
+        msg.data = phrase
+        self._speak_pub.publish(msg)
+        self.get_logger().info(f'Speaking: "{phrase}"')
 
     # ------------------------------------------------------------------
     # Blocking navigation

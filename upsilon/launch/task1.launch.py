@@ -74,7 +74,8 @@ def generate_launch_description():
     # gazebo = IncludeLaunchDescription(
     #     PythonLaunchDescriptionSource(
     #         PathJoinSubstitution([pkg_dis_tutorial3, 'launch', 'sim.launch.py'])
-    #     ),
+    #     ),From 192.168.0.106 icmp_seq=3 Destination Host Unreachable
+
     #     launch_arguments=[
     #         ('world',        LaunchConfiguration('world')),
     #         ('model',        LaunchConfiguration('model')),
@@ -168,22 +169,33 @@ def generate_launch_description():
         parameters=[
             {'device': ''},
             {'use_sim_time': False},
-        ],
-        remappings=[
-            ('/oakd/rgb/preview/image_raw', '/gemini/color/image_raw'),
-            ('/oakd/rgb/preview/depth/points', '/gemini/depth/points'),
+            {'rgb_topic': '/gemini/color/image_raw/compressed'},
+            {'depth_topic': '/gemini/depth/image_raw/compressedDepth'},
+            {'camera_info_topic': '/gemini/depth/camera_info'},
+            {'compressed_topics': True},
         ],
     )
 
     ring_detector = Node(
         package='upsilon',
-        executable='ring_detector',
-        name='ring_detector',
+        executable='ring_detector2',
+        name='ring_detector2',
         output='screen',
-        parameters=[{'use_sim_time': False}],
+        parameters=[
+            {'use_sim_time': False},
+            {'rgb_topic': '/gemini/color/image_raw/compressed'},
+            {'depth_topic': '/gemini/depth/image_raw/compressedDepth'},
+            {'camera_info_topic': '/gemini/depth/camera_info'},
+            {'compressed_topics': True},
+        ],
+        # Remap v2 topics so existing downstream subscribers (controller,
+        # camera_viewer, RViz) keep working unchanged.
         remappings=[
-            ('/oakd/rgb/preview/image_raw', '/gemini/color/image_raw'),
-            ('/oakd/rgb/preview/depth/points', '/gemini/depth/points'),
+            ('/ring_detector2/debug',     '/ring_detector/debug'),
+            ('/ring_detector2/threshold', '/ring_detector/threshold'),
+            ('/ring_detector2/contour',   '/ring_detector/contour'),
+            ('/detected_rings2',          '/detected_rings'),
+            ('/ring_markers2',            '/ring_markers'),
         ],
     )
 
@@ -207,10 +219,10 @@ def generate_launch_description():
         executable='visualizer',
         name='visualizer',
         output='screen',
-        parameters=[{'use_sim_time': False}],
-        remappings=[
-            ('/oakd/rgb/preview/image_raw', '/gemini/color/image_raw'),
-            ('/oakd/rgb/preview/depth/points', '/gemini/depth/points'),
+        parameters=[
+            {'use_sim_time': False},
+            {'rgb_topic': '/gemini/color/image_raw/compressed'},
+            {'compressed_rgb': True},
         ],
     )
 

@@ -16,11 +16,24 @@ bt_navigator:
     error_code_names:
       - compute_path_error_code
       - follow_path_error_code
+    # TurtleBot4's /odom relay publishes BEST_EFFORT; accept that.
+    qos_overrides:
+      /odom:
+        subscription:
+          reliability: best_effort
+          history: keep_last
+          depth: 10
 
 controller_server:
   ros__parameters:
     enable_stamped_cmd_vel: true
     controller_frequency: 20.0
+    qos_overrides:
+      /odom:
+        subscription:
+          reliability: best_effort
+          history: keep_last
+          depth: 10
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -85,10 +98,15 @@ local_costmap:
                   [ 0.000,  0.100],
                   [ 0.070,  0.070]]"
       plugins: ["static_layer", "voxel_layer", "inflation_layer"]
+      filters: ["keepout_filter"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
-        inflation_radius: 0.45
+        cost_scaling_factor: 5.5
+        inflation_radius: 0.30
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/costmap_filter_info"
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -133,6 +151,7 @@ global_costmap:
       resolution: 0.06
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      filters: ["keepout_filter"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -152,8 +171,12 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
-        inflation_radius: 0.45
+        cost_scaling_factor: 5.5
+        inflation_radius: 0.30
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/costmap_filter_info"
       always_send_full_costmap: true
 
 planner_server:
@@ -230,6 +253,12 @@ velocity_smoother:
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
+    qos_overrides:
+      /odom:
+        subscription:
+          reliability: best_effort
+          history: keep_last
+          depth: 10
 
 collision_monitor:
   ros__parameters:

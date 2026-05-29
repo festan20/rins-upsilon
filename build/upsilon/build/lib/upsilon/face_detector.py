@@ -12,13 +12,11 @@ Published topics
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data, QoSReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 import cv2
-import numpy as np
 
-from sensor_msgs.msg import Image, PointCloud2
-from sensor_msgs_py import point_cloud2 as pc2
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo
 from geometry_msgs.msg import PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
@@ -26,7 +24,10 @@ from cv_bridge import CvBridge, CvBridgeError
 
 from ultralytics import YOLO
 
-from upsilon.perception_utils import TF2Helper, IncrementalTrackManager
+from upsilon.perception_utils import (
+    decode_compressed_depth, DepthCameraGeometry, TF2Helper, IncrementalTrackManager,
+    MapBoundsTracker,
+)
 
 
 class FaceDetectorNode(Node):
@@ -39,24 +40,33 @@ class FaceDetectorNode(Node):
 
         self.bridge = CvBridge()
         self.tf2 = TF2Helper(self)
+        self.depth_cam = DepthCameraGeometry(patch_radius=10)
         self.tracker = IncrementalTrackManager(merge_distance=0.8)
+        self.map_bounds = MapBoundsTracker(self)
 
         self.detection_color = (0, 0, 255)
         self._latest_bgr = None
         self._faces = []  # list of (cx, cy) from latest RGB frame
+        self._depth_frame_id = 'camera_depth_optical_frame'
 
         self._last_process_time = 0.0
         self._process_interval = 1.0 / 5.0  # 5 Hz rate limit
 
-        qos = qos_profile_sensor_data
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+        )
 
-        # Subscribers
-        self.create_subscription(Image, '/oakd/rgb/preview/image_raw', self._rgb_cb, qos)
-        self.create_subscription(PointCloud2, '/oakd/rgb/preview/depth/points', self._cloud_cb, qos)
+        # Subscribers — compressed topics to minimise WiFi bandwidth
+        self.create_subscription(CompressedImage, '/gemini/color/image_raw/compressed', self._rgb_cb, qos)
+        self.create_subscription(CompressedImage, '/gemini/depth/image_raw/compressedDepth', self._depth_cb, qos)
+        self.create_subscription(CameraInfo, '/gemini/depth/camera_info', self._caminfo_cb, qos)
 
         # Publishers
         self._face_pub = self.create_publisher(PointStamped, '/detected_faces', 10)
-        self._marker_pub = self.create_publisher(MarkerArray, '/face_markers', QoSReliabilityPolicy.BEST_EFFORT)
+        self._marker_pub = self.create_publisher(MarkerArray, '/face_markers', ReliabilityPolicy.BEST_EFFORT)
         self._debug_pub = self.create_publisher(Image, '/face_detector/debug', 10)
 
         self.model = YOLO("yolov8n.pt")
@@ -64,14 +74,18 @@ class FaceDetectorNode(Node):
         self.get_logger().info('Face detector ready.')
 
     # ------------------------------------------------------------------
-    def _rgb_cb(self, msg: Image) -> None:
+    def _rgb_cb(self, msg: CompressedImage) -> None:
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+            cv_image = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
         except CvBridgeError as e:
             self.get_logger().error(f'CvBridgeError: {e}')
             return
 
         self._faces = []
+        img_h = cv_image.shape[0]
+        # Faces are only in the bottom 65% of the frame — ignore any detection
+        # whose centre is above this row (i.e. in the top 35%).
+        bottom_half_y = int(img_h * 0.35)
 
         # Run YOLO inference
         res = self.model.predict(
@@ -86,6 +100,11 @@ class FaceDetectorNode(Node):
 
             bbox = bbox[0]
 
+            cx = int((bbox[0] + bbox[2]) / 2)
+            cy = int((bbox[1] + bbox[3]) / 2)
+            if cy < bottom_half_y:
+                continue  # top half — not a face
+
             # Draw bounding box
             cv_image = cv2.rectangle(
                 cv_image,
@@ -93,10 +112,6 @@ class FaceDetectorNode(Node):
                 (int(bbox[2]), int(bbox[3])),
                 self.detection_color, 3
             )
-
-            cx = int((bbox[0] + bbox[2]) / 2)
-            cy = int((bbox[1] + bbox[3]) / 2)
-
             # Draw center
             cv_image = cv2.circle(cv_image, (cx, cy), 5, self.detection_color, -1)
             self._faces.append((cx, cy))
@@ -118,7 +133,11 @@ class FaceDetectorNode(Node):
             self.get_logger().error(f'Debug publish error: {e}')
 
     # ------------------------------------------------------------------
-    def _cloud_cb(self, msg: PointCloud2) -> None:
+    def _caminfo_cb(self, msg: CameraInfo) -> None:
+        self.depth_cam.update_intrinsics(msg)
+        self._depth_frame_id = msg.header.frame_id
+
+    def _depth_cb(self, msg: CompressedImage) -> None:
         if not self._faces:
             return
 
@@ -128,61 +147,47 @@ class FaceDetectorNode(Node):
         self._last_process_time = now
 
         try:
-            self._cloud_cb_inner(msg)
+            self._depth_cb_inner(msg)
         except Exception as e:
             self.get_logger().error(f'Face detection error (recovering): {e}')
 
-    def _cloud_cb_inner(self, msg: PointCloud2) -> None:
-        height = msg.height
-        width = msg.width
+    def _depth_cb_inner(self, msg: CompressedImage) -> None:
+        depth_m = decode_compressed_depth(msg)
+        if depth_m is None:
+            self.get_logger().error('Failed to decode compressedDepth')
+            return
 
-        # Get 3D points from pointcloud
-        a = pc2.read_points_numpy(msg, field_names=("x", "y", "z"))
-        a = a.reshape((height, width, 3))
+        self.depth_cam.update_depth(depth_m)
 
         for cx, cy in self._faces:
-            # Bounds check
-            if cx < 0 or cx >= width or cy < 0 or cy >= height:
-                continue
-
-            # Sample a patch around center, take median of valid points
-            patch_r = 10
-            v_lo = max(0, cy - patch_r)
-            v_hi = min(height, cy + patch_r + 1)
-            u_lo = max(0, cx - patch_r)
-            u_hi = min(width, cx + patch_r + 1)
-            patch = a[v_lo:v_hi, u_lo:u_hi, :]  # (pH, pW, 3)
-            patch_flat = patch.reshape(-1, 3)
-            valid = patch_flat[
-                np.isfinite(patch_flat[:, 0]) &
-                np.isfinite(patch_flat[:, 1]) &
-                np.isfinite(patch_flat[:, 2]) &
-                (patch_flat[:, 2] > 0)
-            ]
-
-            if len(valid) == 0:
+            pt_3d = self.depth_cam.get_point(cx, cy)
+            if pt_3d is None:
                 self.get_logger().info('Face detected but no valid depth in patch.')
                 continue
 
-            d = np.median(valid, axis=0)
-
             # Build PointStamped in camera frame
             pt = PointStamped()
-            pt.header.frame_id = msg.header.frame_id
+            pt.header.frame_id = self._depth_frame_id
             pt.header.stamp = msg.header.stamp
-            pt.point.x = float(d[0])
-            pt.point.y = float(d[1])
-            pt.point.z = float(d[2])
+            pt.point.x = pt_3d[0]
+            pt.point.y = pt_3d[1]
+            pt.point.z = pt_3d[2]
 
             # Transform to map frame
             map_pt = self.tf2.transform_point(pt, 'map')
             if map_pt is None:
-                self.get_logger().warn(f'TF failed: {msg.header.frame_id} -> map')
+                self.get_logger().warn(f'TF failed: {self._depth_frame_id} -> map')
                 continue
 
             mx = map_pt.point.x
             my = map_pt.point.y
             mz = map_pt.point.z
+
+            if not self.map_bounds.is_in_bounds(mx, my):
+                self.get_logger().info(
+                    f'Face off-map ({mx:.2f}, {my:.2f}) — skipped',
+                    throttle_duration_sec=2.0)
+                continue
 
             # Deduplicate
             track_id, is_new = self.tracker.update(mx, my)

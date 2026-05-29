@@ -23,8 +23,6 @@ Panels:
     Splitter Ratio: 0.5
   - Class: nav2_rviz_plugins/Navigation 2
     Name: Navigation 2
-  - Class: slam_toolbox::SlamToolboxPlugin
-    Name: SlamToolboxPlugin
 Visualization Manager:
   Class: ""
   Displays:
@@ -554,8 +552,6 @@ Window Geometry:
   Navigation 2:
     collapsed: false
   Selection:
-    collapsed: false
-  SlamToolboxPlugin:
     collapsed: false
   Tool Properties:
     collapsed: false

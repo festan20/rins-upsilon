@@ -1,101 +1,133 @@
 """Shared perception utilities for face and ring detectors."""
 
-import struct
 import math
 import numpy as np
+import cv2
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PointStamped
+from nav_msgs.msg import OccupancyGrid
 import tf2_ros
 import tf2_geometry_msgs  # noqa: F401 — registers transform methods
 
 
+class MapBoundsTracker:
+    """Subscribes to /map and checks whether an (x, y) is within the map bounds.
+
+    Until a map message arrives, every point is considered in-bounds so the
+    detectors don't drop everything at startup.
+    """
+
+    def __init__(self, node: Node, topic: str = '/map'):
+        self._x_min = None
+        self._x_max = None
+        self._y_min = None
+        self._y_max = None
+        # The map server publishes with TRANSIENT_LOCAL durability so late
+        # subscribers still get the map; match it.
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        node.create_subscription(OccupancyGrid, topic, self._map_cb, qos)
+
+    def _map_cb(self, msg: OccupancyGrid) -> None:
+        info = msg.info
+        self._x_min = info.origin.position.x
+        self._y_min = info.origin.position.y
+        self._x_max = self._x_min + info.width * info.resolution
+        self._y_max = self._y_min + info.height * info.resolution
+
+    def is_in_bounds(self, x: float, y: float) -> bool:
+        if self._x_min is None:
+            return True
+        return (self._x_min <= x <= self._x_max and
+                self._y_min <= y <= self._y_max)
+
+
+def decode_compressed_depth(msg) -> np.ndarray | None:
+    """Decode a compressedDepth message to a float32 depth image in metres.
+
+    The Gemini compressedDepth format is: 12-byte header + PNG data (16UC1, mm).
+    Returns (H, W) float32 array in metres, or None on failure.
+    """
+    data = bytes(msg.data)
+    png_magic = b'\x89PNG'
+    idx = data.find(png_magic)
+    if idx < 0:
+        return None
+    png_buf = np.frombuffer(data[idx:], dtype=np.uint8)
+    img = cv2.imdecode(png_buf, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    return img.astype(np.float32) / 1000.0  # mm → metres
+
+
 class DepthCameraGeometry:
-    """Extract 3D world points from a PointCloud2 message at given pixel (u, v)."""
+    """Extract 3D world points from a depth image + camera intrinsics at given pixel (u, v)."""
 
     def __init__(self, patch_radius: int = 3):
         self.patch_radius = patch_radius
-        self._cloud_data: np.ndarray | None = None
-        self._cloud_width: int = 0
-        self._cloud_height: int = 0
+        self._depth: np.ndarray | None = None
+        self._fx: float = 0.0
+        self._fy: float = 0.0
+        self._cx: float = 0.0
+        self._cy: float = 0.0
+        self._has_intrinsics = False
 
-    def update(self, cloud_msg) -> None:
-        """Cache the latest PointCloud2 message for subsequent lookups."""
-        self._cloud_msg = cloud_msg
-        self._cloud_width = cloud_msg.width
-        self._cloud_height = cloud_msg.height
+    def update_intrinsics(self, camera_info_msg) -> None:
+        """Cache camera intrinsics from a CameraInfo message."""
+        K = camera_info_msg.k
+        self._fx = K[0]
+        self._fy = K[4]
+        self._cx = K[2]
+        self._cy = K[5]
+        self._has_intrinsics = True
 
-        # Read all point data as a flat numpy array of bytes, then reshape
-        data = np.frombuffer(cloud_msg.data, dtype=np.uint8)
-        self._raw = data
-        self._point_step = cloud_msg.point_step
-        self._row_step = cloud_msg.row_step
+    def update_depth(self, depth_img: np.ndarray) -> None:
+        """Cache a depth image (float32, metres)."""
+        self._depth = depth_img
 
     def get_depth_image(self) -> np.ndarray | None:
-        """Extract a 2D depth image (float32, metres) from the cached PointCloud2.
-
-        Returns an (H, W) array of Z values, or None if no cloud is cached.
-        NaN/invalid pixels are set to 0.
-        """
-        if not hasattr(self, '_raw'):
-            return None
-
-        h, w = self._cloud_height, self._cloud_width
-        if h == 0 or w == 0:
-            return None
-
-        ps = self._point_step
-        rs = self._row_step
-
-        # Handle row padding: extract row by row if row_step != width * point_step
-        if rs == w * ps:
-            flat = self._raw[:h * w * ps].reshape(h * w, ps)
-        else:
-            rows = []
-            for v in range(h):
-                row_start = v * rs
-                row = self._raw[row_start:row_start + w * ps].reshape(w, ps)
-                rows.append(row)
-            flat = np.vstack(rows)
-
-        z_bytes = flat[:, 8:12].copy()  # copy to ensure contiguous
-        z_vals = z_bytes.view(np.float32).reshape(h, w)
-        depth = np.where(np.isfinite(z_vals) & (z_vals > 0.0), z_vals, 0.0).astype(np.float32)
-        return depth
+        """Return the cached depth image (H, W) float32 in metres, or None."""
+        return self._depth
 
     def get_point(self, u: int, v: int):
         """Return (x, y, z) in camera frame at pixel (u, v), or None if invalid.
 
-        Samples a small patch around (u, v) and returns the median of valid points
-        to reduce sensitivity to noise and missing depth values.
+        Uses depth image + camera intrinsics to deproject.
+        Samples a small patch around (u, v) and returns the median of valid points.
         """
-        if not hasattr(self, '_raw'):
+        if self._depth is None or not self._has_intrinsics:
             return None
 
+        h, w = self._depth.shape[:2]
         r = self.patch_radius
-        xs, ys, zs = [], [], []
 
-        for dv in range(-r, r + 1):
-            for du in range(-r, r + 1):
-                pu = u + du
-                pv = v + dv
-                if pu < 0 or pu >= self._cloud_width or pv < 0 or pv >= self._cloud_height:
-                    continue
-                offset = pv * self._row_step + pu * self._point_step
-                xb = self._raw[offset:offset + 4].tobytes()
-                yb = self._raw[offset + 4:offset + 8].tobytes()
-                zb = self._raw[offset + 8:offset + 12].tobytes()
-                x = struct.unpack('f', xb)[0]
-                y = struct.unpack('f', yb)[0]
-                z = struct.unpack('f', zb)[0]
-                if math.isfinite(x) and math.isfinite(y) and math.isfinite(z) and z > 0.0:
-                    xs.append(x)
-                    ys.append(y)
-                    zs.append(z)
+        v_lo = max(0, v - r)
+        v_hi = min(h, v + r + 1)
+        u_lo = max(0, u - r)
+        u_hi = min(w, u + r + 1)
 
-        if not xs:
+        patch = self._depth[v_lo:v_hi, u_lo:u_hi]
+        valid_mask = (patch > 0.0) & np.isfinite(patch)
+        if not np.any(valid_mask):
             return None
-        return (float(np.median(xs)), float(np.median(ys)), float(np.median(zs)))
+
+        # Get pixel coordinates for valid points
+        vs, us = np.where(valid_mask)
+        vs += v_lo
+        us += u_lo
+        depths = self._depth[vs, us]
+
+        # Deproject using intrinsics
+        xs = (us - self._cx) * depths / self._fx
+        ys = (vs - self._cy) * depths / self._fy
+
+        return (float(np.median(xs)), float(np.median(ys)), float(np.median(depths)))
 
 
 class TF2Helper:
@@ -166,3 +198,7 @@ class IncrementalTrackManager:
     @property
     def track_count(self) -> int:
         return len(self._tracks)
+
+    @property
+    def tracks(self) -> list[dict]:
+        return self._tracks
