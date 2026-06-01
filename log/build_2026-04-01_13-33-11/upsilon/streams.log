@@ -1,0 +1,25 @@
+[0.599s] Invoking command in '/home/upsilon/colcon_ws/rins-upsilon/upsilon': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/upsilon build --build-base /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build install --record /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log --single-version-externally-managed install_data
+[0.776s] running egg_info
+[0.790s] writing ../build/upsilon/upsilon.egg-info/PKG-INFO
+[0.790s] writing dependency_links to ../build/upsilon/upsilon.egg-info/dependency_links.txt
+[0.790s] writing entry points to ../build/upsilon/upsilon.egg-info/entry_points.txt
+[0.790s] writing requirements to ../build/upsilon/upsilon.egg-info/requires.txt
+[0.790s] writing top-level names to ../build/upsilon/upsilon.egg-info/top_level.txt
+[0.818s] reading manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+[0.818s] writing manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+[0.818s] running build
+[0.818s] running build_py
+[0.818s] running install
+[0.823s] running install_lib
+[0.837s] running install_data
+[0.837s] running install_egg_info
+[0.851s] removing '/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info' (and everything under it)
+[0.851s] Copying ../build/upsilon/upsilon.egg-info to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info
+[0.852s] running install_scripts
+[0.941s] Installing controller script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.941s] Installing face_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.941s] Installing ring_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.941s] Installing speech script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.941s] Installing visualizer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.941s] writing list of installed files to '/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log'
+[0.957s] Invoked command in '/home/upsilon/colcon_ws/rins-upsilon/upsilon' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/upsilon build --build-base /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build install --record /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log --single-version-externally-managed install_data

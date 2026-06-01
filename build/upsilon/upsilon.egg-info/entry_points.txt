@@ -1,6 +1,9 @@
 [console_scripts]
+camera_viewer = upsilon.camera_viewer:main
 controller = upsilon.controller:main
 face_detector = upsilon.face_detector:main
 ring_detector = upsilon.ring_detector:main
+ring_detector2 = upsilon.ring_detector2:main
 speech = upsilon.speech:main
 visualizer = upsilon.visualizer:main
+wasd_teleop = upsilon.wasd_teleop:main

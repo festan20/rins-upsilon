@@ -1,0 +1,29 @@
+[1.275s] Invoking command in '/home/upsilon/colcon_ws/rins-upsilon/build/upsilon': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build --no-deps symlink_data --force
+[1.756s] running develop
+[2.043s] running egg_info
+[2.073s] writing upsilon.egg-info/PKG-INFO
+[2.073s] writing dependency_links to upsilon.egg-info/dependency_links.txt
+[2.073s] writing entry points to upsilon.egg-info/entry_points.txt
+[2.073s] writing requirements to upsilon.egg-info/requires.txt
+[2.073s] writing top-level names to upsilon.egg-info/top_level.txt
+[2.135s] reading manifest file 'upsilon.egg-info/SOURCES.txt'
+[2.136s] writing manifest file 'upsilon.egg-info/SOURCES.txt'
+[2.169s] running build_ext
+[2.169s] Creating /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon.egg-link (link to .)
+[2.173s] Installing controller script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[2.176s] Installing face_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[2.176s] Installing ring_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[2.176s] Installing speech script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[2.176s] Installing visualizer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[2.176s] 
+[2.176s] Installed /home/upsilon/colcon_ws/rins-upsilon/build/upsilon
+[2.176s] running symlink_data
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/resource/upsilon -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/ament_index/resource_index/packages
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/package.xml -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/launch/detectors_only.launch.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/launch
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/launch/task1.launch.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/launch
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/launch/exploration_only.launch.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/launch
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/config/upsilon.rviz -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/config
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/map/map.yaml -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/map
+[2.177s] symbolically linking /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/map/map.pgm -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/map
+[2.308s] Invoked command in '/home/upsilon/colcon_ws/rins-upsilon/build/upsilon' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build --no-deps symlink_data --force

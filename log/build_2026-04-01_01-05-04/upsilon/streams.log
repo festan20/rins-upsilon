@@ -1,0 +1,31 @@
+[0.557s] Invoking command in '/home/upsilon/colcon_ws/rins-upsilon/upsilon': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/upsilon build --build-base /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build install --record /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log --single-version-externally-managed install_data
+[0.739s] running egg_info
+[0.752s] writing ../build/upsilon/upsilon.egg-info/PKG-INFO
+[0.752s] writing dependency_links to ../build/upsilon/upsilon.egg-info/dependency_links.txt
+[0.752s] writing entry points to ../build/upsilon/upsilon.egg-info/entry_points.txt
+[0.752s] writing requirements to ../build/upsilon/upsilon.egg-info/requires.txt
+[0.753s] writing top-level names to ../build/upsilon/upsilon.egg-info/top_level.txt
+[0.780s] reading manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+[0.781s] writing manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+[0.781s] running build
+[0.781s] running build_py
+[0.781s] copying upsilon/controller.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.781s] running install
+[0.786s] running install_lib
+[0.799s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/controller.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.800s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/controller.py to controller.cpython-312.pyc
+[0.802s] running install_data
+[0.802s] creating /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/sounds
+[0.802s] copying sounds/red.mp3 -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/sounds
+[0.802s] copying sounds/orange.mp3 -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/sounds
+[0.802s] running install_egg_info
+[0.817s] removing '/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info' (and everything under it)
+[0.817s] Copying ../build/upsilon/upsilon.egg-info to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info
+[0.818s] running install_scripts
+[0.908s] Installing controller script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.908s] Installing face_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.908s] Installing ring_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.908s] Installing speech script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.908s] Installing visualizer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.908s] writing list of installed files to '/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log'
+[0.925s] Invoked command in '/home/upsilon/colcon_ws/rins-upsilon/upsilon' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/upsilon build --build-base /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build install --record /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log --single-version-externally-managed install_data

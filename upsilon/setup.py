@@ -14,6 +14,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'map'), glob('map/*')),
+        (os.path.join('share', package_name, 'sounds'), glob('sounds/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -26,9 +27,14 @@ setup(
         'console_scripts': [
             'face_detector = upsilon.face_detector:main',
             'ring_detector = upsilon.ring_detector:main',
+            'ring_detector2 = upsilon.ring_detector2:main',
+            'blue_line_detector = upsilon.blue_line_detector:main',
+            'blue_line_follower = upsilon.blue_line_follower:main',
             'controller = upsilon.controller:main',
             'speech = upsilon.speech:main',
             'visualizer = upsilon.visualizer:main',
+            'camera_viewer = upsilon.camera_viewer:main',
+            'wasd_teleop = upsilon.wasd_teleop:main',
         ],
     },
 )

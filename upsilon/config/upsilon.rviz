@@ -23,8 +23,6 @@ Panels:
     Splitter Ratio: 0.5
   - Class: nav2_rviz_plugins/Navigation 2
     Name: Navigation 2
-  - Class: slam_toolbox::SlamToolboxPlugin
-    Name: SlamToolboxPlugin
 Visualization Manager:
   Class: ""
   Displays:
@@ -452,7 +450,7 @@ Visualization Manager:
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        History Policy: Keep Last
+        History Policy: Keep All
         Reliability Policy: Best Effort
         Value: /face_markers
       Value: true
@@ -464,7 +462,7 @@ Visualization Manager:
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        History Policy: Keep Last
+        History Policy: Keep All
         Reliability Policy: Best Effort
         Value: /ring_markers
       Value: true
@@ -476,7 +474,7 @@ Visualization Manager:
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        History Policy: Keep Last
+        History Policy: Keep All
         Reliability Policy: Best Effort
         Value: /explore_face_markers
       Value: true
@@ -488,7 +486,7 @@ Visualization Manager:
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        History Policy: Keep Last
+        History Policy: Keep All
         Reliability Policy: Best Effort
         Value: /explore_ring_markers
       Value: true
@@ -554,8 +552,6 @@ Window Geometry:
   Navigation 2:
     collapsed: false
   Selection:
-    collapsed: false
-  SlamToolboxPlugin:
     collapsed: false
   Tool Properties:
     collapsed: false

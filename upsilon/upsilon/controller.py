@@ -1,26 +1,24 @@
 """Mission controller node.
 
-FSM (3-phase):
-    EXPLORE  — drives every waypoint in order; spins 360° on arrival;
-               buffers all face/ring detections and shows live RViz markers
-    MATCH    — clusters raw detections spatially; majority-votes ring colours
-    VISIT    — approaches each matched target, speaks, then moves to the next
-    DONE     — all matched targets visited; announces mission complete
+Sequential flow:
+    1. explore() — drives every waypoint, spins 360° at each
+    2. visit()   — approaches each detected ring, pauses to look at it
 
-Detection callbacks during EXPLORE only buffer data — no interruptions.
+Ring detections arrive via /detected_rings during exploration
+(already deduplicated by ring_detector).
 
-Run with a MultiThreadedExecutor so that action callbacks and topic
-callbacks can execute concurrently.
+Runs on a MultiThreadedExecutor so that topic/action callbacks
+fire while the mission thread blocks.
 """
 
 import math
+import threading
 import time
-from enum import Enum, auto
 
-from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion
 from geometry_msgs.msg import PointStamped
 from nav2_msgs.action import NavigateToPose, Spin
+from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -32,34 +30,55 @@ from rclpy.node import Node
 from rclpy.qos import (
     QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
 )
+from std_srvs.srv import SetBool
 
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Tuning parameters
-# ---------------------------------------------------------------------------
-APPROACH_DISTANCE = 0.7    # metres — stop this far from a target
-INTERACT_WAIT_S   = 3.0    # seconds to wait after speaking
-WAYPOINT_TIMEOUT_S = 30.0  # give up on a waypoint nav after this long
-CLUSTER_RADIUS     = 1.0   # metres — detections within this radius → same target
-
+# --------------------------------------------------------------------------
+APPROACH_DISTANCE = 0.5    # metres — stop this far from a ring
+LOOK_DURATION_S   = 5.0    # seconds to pause looking at a ring (also lets TTS finish)
+NAV_TIMEOUT_S     = 30.0   # give up on a nav goal after this long
+SPIN_TIMEOUT_S    = 20.0   # give up on a spin after this long
+POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
+APPROACH_CANDIDATES = 24   # how many angles to try around the target
+NUM_FACES_TO_VISIT = 3     # target number of faces to visit
+NUM_RINGS_TO_VISIT = 2     # target number of rings to visit
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
-#    (2.0,  -0.4,  0.0),
-#    (2.0,  -2.2,  0.0),
-#    (0.6,  -3.7,  0.0),
-#    (0.0,   -2.0, 0.0),
-#    (-1.6,  -1.0, 0.0),
-#    (-2.2,   0.7, 0.0),
-#    (-2.3,   2.5, 0.0),
-#    (0.6,    2.6, 0.0),
-#    (1.0,   1.6, 0.0),
-#    (-0.5,   1.2,  0.0),
-#    ( -1.6,   -1.0,  0.0),
-]
+    #Task2
+    (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
-# Colour → RGBA (for explore markers)
+    
+    # Real robot waypoints
+    #(1.7515618801116943,  2.5002310276031494,  0.0),
+    #(0.7185518741607666, 1.8272650241851807, 1.5),
+    #(-1.4692095041275024, 2.340272617340088,   -1.5),
+    #(-1.511810541152954, 1.9055171012878418,  3.0),
+
+
+    # Previous sets — kept for reference
+   # (0.88, 2.0, 0.0),
+   #
+   # (-0.2, 2.5, 0.0),
+   # (-1.6, 2.0, 0.0),
+    #(-2.5, 1.42, 0.0)
+
+    #(2.0,  -0.4,  0.0),
+    #(2.0,  -2.2,  0.0),
+    #(0.6,  -3.7,  0.0),
+    #(0.0,   -2.0, 0.0),
+    #(-1.6,  -1.0, 0.0),
+    #(-2.2,   0.7, 0.0),
+    #(-2.3,   2.5, 0.0),
+    #(0.6,    2.6, 0.0),
+    #(1.0,   1.6, 0.0),
+    #(-0.5,   1.2,  0.0),
+    #(-1.6,  -1.0,  0.0),
+]
 _COLOUR_RGBA: dict[str, ColorRGBA] = {
+    'red':     ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0),
     'blue':    ColorRGBA(r=0.0, g=0.3, b=1.0, a=1.0),
     'green':   ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0),
     'yellow':  ColorRGBA(r=1.0, g=1.0, b=0.0, a=1.0),
@@ -69,7 +88,6 @@ _COLOUR_RGBA: dict[str, ColorRGBA] = {
     'unknown': ColorRGBA(r=0.5, g=0.5, b=0.5, a=1.0),
 }
 
-# ---------------------------------------------------------------------------
 amcl_qos = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
     reliability=QoSReliabilityPolicy.RELIABLE,
@@ -78,19 +96,67 @@ amcl_qos = QoSProfile(
 )
 
 
-class State(Enum):
-    EXPLORE = auto()
-    MATCH   = auto()
-    VISIT   = auto()
-    DONE    = auto()
+class CostmapChecker:
+    """Subscribes to /global_costmap/costmap and exposes is_free(x, y).
+
+    A cell is considered free when its cost is below `threshold` (0–99) and
+    is not -1 (unknown). If no costmap has been received yet, every query
+    returns True so behaviour falls back to the naive approach.
+    """
+
+    def __init__(self, node: Node, topic: str = '/global_costmap/costmap'):
+        self._data: tuple | None = None
+        self._origin_x = 0.0
+        self._origin_y = 0.0
+        self._resolution = 0.05
+        self._width = 0
+        self._height = 0
+        qos = QoSProfile(
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        node.create_subscription(OccupancyGrid, topic, self._cb, qos)
+
+    def _cb(self, msg: OccupancyGrid) -> None:
+        self._data = msg.data
+        self._origin_x = msg.info.origin.position.x
+        self._origin_y = msg.info.origin.position.y
+        self._resolution = msg.info.resolution
+        self._width = msg.info.width
+        self._height = msg.info.height
+
+    def is_free(self, x: float, y: float, threshold: int = 50) -> bool:
+        if self._data is None:
+            return True
+        col = int((x - self._origin_x) / self._resolution)
+        row = int((y - self._origin_y) / self._resolution)
+        if not (0 <= col < self._width and 0 <= row < self._height):
+            return False
+        val = self._data[row * self._width + col]
+        return 0 <= val < threshold
 
 
-class Target:
-    def __init__(self, kind: str, x: float, y: float, colour: str = ''):
-        self.kind   = kind      # 'face' or 'ring'
-        self.x      = x
-        self.y      = y
-        self.colour = colour    # ring colour or ''
+class Ring:
+    def __init__(self, x: float, y: float, colour: str, track_id: int = -1,
+                 count: int = 1, seen_order: int = 0):
+        self.x = x
+        self.y = y
+        self.colour = colour
+        self.track_id = track_id
+        self.count = count
+        self.seen_order = seen_order  # global discovery index (higher = seen later)
+
+
+class Face:
+    def __init__(self, x: float, y: float, track_id: int = -1, count: int = 1,
+                 seen_order: int = 0):
+        self.x = x
+        self.y = y
+        self.track_id = track_id
+        self.seen_order = seen_order  # global discovery index (higher = seen later)
+        self.count = count
 
 
 class ControllerNode(Node):
@@ -104,305 +170,346 @@ class ControllerNode(Node):
                                          callback_group=self._cbg)
         self._spin_client = ActionClient(self, Spin, 'spin',
                                          callback_group=self._cbg)
+        self._blue_line_client = self.create_client(SetBool, '/blue_line/set_active')
 
         # Publishers
-        self._speech_pub = self.create_publisher(String, '/speech', 10)
-        self._explore_face_markers_pub = self.create_publisher(
-            MarkerArray, '/explore_face_markers', 10)
-        self._explore_ring_markers_pub = self.create_publisher(
+        self._ring_markers_pub = self.create_publisher(
             MarkerArray, '/explore_ring_markers', 10)
+        self._face_markers_pub = self.create_publisher(
+            MarkerArray, '/explore_face_markers', 10)
+        # TurtleBot4 onboard TTS listens on /speak
+        self._speak_pub = self.create_publisher(String, '/speak', 10)
+
+        # Global costmap reader — used to pick free approach poses
+        self._costmap = CostmapChecker(self)
 
         # Subscribers
-        self.create_subscription(PointStamped, '/detected_faces',
-                                 self._face_cb, 10, callback_group=self._cbg)
         self.create_subscription(PointStamped, '/detected_rings',
                                  self._ring_cb, 10, callback_group=self._cbg)
+        self.create_subscription(PointStamped, '/detected_faces',
+                                 self._face_cb, 10, callback_group=self._cbg)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose',
                                  self._amcl_cb, amcl_qos, callback_group=self._cbg)
 
-        # --- Robot pose ---
+        # Robot pose
         self._current_pose_x = 0.0
         self._current_pose_y = 0.0
 
-        # --- FSM ---
-        self._state = State.EXPLORE
+        # Detected rings keyed by track_id (updated with latest position/count)
+        self._rings: dict[int, Ring] = {}
+        # Detected faces keyed by track_id (updated with latest position/count)
+        self._faces: dict[int, Face] = {}
+        # Global discovery counter — shared by faces and rings so we have a
+        # single timeline of "what was seen when".
+        self._discovery_counter = 0
 
-        # --- EXPLORE sub-state ---
-        self._explore_sub = 'drive'   # 'drive' | 'spin'
-        self._waypoint_idx = 0
-
-        # --- Raw detection buffers ---
-        self._raw_faces: list[tuple[float, float]]        = []
-        self._raw_rings: list[tuple[float, float, str]]   = []
-
-        # --- Nav state ---
-        self._nav_goal_handle  = None
+        # Nav/spin async state (set by callbacks)
+        self._nav_goal_handle   = None
         self._nav_result_future = None
-        self._nav_sent_time: float | None = None
-
-        # --- Spin state ---
         self._spin_goal_handle   = None
         self._spin_result_future = None
 
-        # --- VISIT state ---
-        self._targets_to_visit: list[Target] = []
-        self._visit_idx   = 0
-        self._visit_sub   = 'drive'   # 'drive' | 'interact'
-        self._visit_target: Target | None  = None
-        self._visit_interact_start: float | None = None
-
-        # Main FSM timer
-        self._timer = self.create_timer(0.5, self._fsm_tick, callback_group=self._cbg)
-
-        self.get_logger().info('Controller ready. Waiting for Nav2...')
-        self._wait_for_nav2()
-        self.get_logger().info('Nav2 is up. Starting exploration.')
-
-        # Kick off first waypoint
-        self._advance_waypoint()
+        # Start mission on a separate thread so callbacks keep firing
+        self._mission_thread = threading.Thread(target=self._run_mission, daemon=True)
+        self._mission_thread.start()
 
     # ------------------------------------------------------------------
-    # Callbacks
+    # Callbacks (run on executor threads)
     # ------------------------------------------------------------------
     def _amcl_cb(self, msg: PoseWithCovarianceStamped) -> None:
         self._current_pose_x = msg.pose.pose.position.x
         self._current_pose_y = msg.pose.pose.position.y
 
-    def _face_cb(self, msg: PointStamped) -> None:
-        x, y = msg.point.x, msg.point.y
-        self._raw_faces.append((x, y))
-        self.get_logger().info(f'Raw face buffered at ({x:.2f}, {y:.2f})')
-        self._publish_explore_markers()
-
     def _ring_cb(self, msg: PointStamped) -> None:
         x, y = msg.point.x, msg.point.y
-        colour = msg.header.frame_id.split('/')[-1] if '/' in msg.header.frame_id else 'unknown'
-        self._raw_rings.append((x, y, colour))
-        self.get_logger().info(f'Raw ring ({colour}) buffered at ({x:.2f}, {y:.2f})')
-        self._publish_explore_markers()
+        # frame_id format: map/<colour>/<track_id>/<count>
+        parts = msg.header.frame_id.split('/')
+        colour = parts[1] if len(parts) >= 2 else 'unknown'
+        track_id = int(parts[2]) if len(parts) >= 3 else -1
+        count = int(parts[3]) if len(parts) >= 4 else 1
+
+        # Preserve discovery order for known tracks; assign next index for new ones
+        if track_id in self._rings:
+            seen_order = self._rings[track_id].seen_order
+        else:
+            seen_order = self._discovery_counter
+            self._discovery_counter += 1
+
+        self._rings[track_id] = Ring(x, y, colour, track_id, count, seen_order)
+        self.get_logger().info(
+            f'Ring #{track_id} ({colour}) count={count} at ({x:.2f}, {y:.2f}) '
+            f'— {len(self._rings)} unique tracks')
+        self._publish_ring_markers()
+
+    def _face_cb(self, msg: PointStamped) -> None:
+        x, y = msg.point.x, msg.point.y
+        # frame_id format: map/<track_id>/<count>
+        parts = msg.header.frame_id.split('/')
+        track_id = int(parts[1]) if len(parts) >= 2 else -1
+        count = int(parts[2]) if len(parts) >= 3 else 1
+
+        # Preserve discovery order for known tracks; assign next index for new ones
+        if track_id in self._faces:
+            seen_order = self._faces[track_id].seen_order
+        else:
+            seen_order = self._discovery_counter
+            self._discovery_counter += 1
+
+        self._faces[track_id] = Face(x, y, track_id, count, seen_order)
+        self.get_logger().info(
+            f'Face #{track_id} count={count} at ({x:.2f}, {y:.2f}) '
+            f'— {len(self._faces)} unique tracks')
+        self._publish_face_markers()
 
     # ------------------------------------------------------------------
-    # FSM dispatcher
+    # Mission (blocking, runs on its own thread)
     # ------------------------------------------------------------------
-    def _fsm_tick(self) -> None:
-        if   self._state == State.EXPLORE: self._tick_explore()
-        elif self._state == State.MATCH:   self._tick_match()
-        elif self._state == State.VISIT:   self._tick_visit()
-        elif self._state == State.DONE:    pass
+    def _run_mission(self) -> None:
+        self._wait_for_nav2()
+        self.get_logger().info('Nav2 is up. Driving to blue-line start checkpoint.')
+
+        self._explore()
+        if self._activate_blue_line_following():
+            self.get_logger().info('Blue-line follower activated. Controller mission handoff complete.')
+        else:
+            self.get_logger().error('Blue-line follower activation failed. Not running legacy face/ring visit logic.')
 
     # ------------------------------------------------------------------
     # Phase 1 — EXPLORE
     # ------------------------------------------------------------------
-    def _tick_explore(self) -> None:
-        if self._explore_sub == 'drive':
-            if self._nav_is_complete():
-                self._explore_sub = 'spin'
+    def _exploration_complete(self) -> bool:
+        if len(self._faces) < 3 or len(self._rings) < 2:
+            return False
+        top_faces = sorted(self._faces.values(), key=lambda f: f.count, reverse=True)[:3]
+        top_rings = sorted(self._rings.values(), key=lambda r: r.count, reverse=True)[:2]
+        return all(f.count > 15 for f in top_faces) and all(r.count > 15 for r in top_rings)
+
+    def _explore(self) -> None:
+        for i, wp in enumerate(EXPLORATION_WAYPOINTS):
+            self.get_logger().info(
+                f'Waypoint {i+1}/{len(EXPLORATION_WAYPOINTS)} '
+                f'({wp[0]:.1f}, {wp[1]:.1f})')
+
+            self._navigate_to(*wp)
+            # self.get_logger().info('Waypoint reached, spinning 360°')
+            # self._spin_360()
+
+    def _activate_blue_line_following(self) -> bool:
+        """Enable blue-line follower runtime mode via service call."""
+        if not self._blue_line_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('/blue_line/set_active service not available.')
+            return False
+
+        req = SetBool.Request()
+        req.data = True
+        future = self._blue_line_client.call_async(req)
+
+        t0 = time.monotonic()
+        while not future.done():
+            time.sleep(POLL_INTERVAL_S)
+            if time.monotonic() - t0 > 10.0:
+                self.get_logger().error('Timed out while enabling blue-line follower.')
+                return False
+
+        try:
+            res = future.result()
+        except Exception as exc:  # pragma: no cover - defensive runtime logging
+            self.get_logger().error(f'Failed to enable blue-line follower: {exc}')
+            return False
+
+        if not res.success:
+            self.get_logger().error(f'Blue-line follower refused activation: {res.message}')
+            return False
+
+        self.get_logger().info(f'Blue-line activation response: {res.message}')
+        return True
+
+    # ------------------------------------------------------------------
+    # Phase 2 — VISIT
+    # ------------------------------------------------------------------
+    def _find_approach_pose(self, target_x: float, target_y: float
+                            ) -> tuple[float, float, float]:
+        """Pick an approach pose APPROACH_DISTANCE from the target, facing it.
+
+        Samples ``APPROACH_CANDIDATES`` points on a ring around the target,
+        starting from the side closest to the robot, then fanning out.
+        Returns the first one whose cell is free in the global costmap.
+        If nothing is free (or the costmap hasn't arrived yet) it falls back
+        to the natural-side point. ``yaw`` is always set so the robot faces
+        the target.
+        """
+        dx = self._current_pose_x - target_x
+        dy = self._current_pose_y - target_y
+        base_angle = math.atan2(dy, dx)  # direction target → robot
+
+        step = 2.0 * math.pi / APPROACH_CANDIDATES
+        # Interleaved fan-out: 0, +step, -step, +2*step, -2*step, ...
+        angles = [base_angle]
+        for k in range(1, APPROACH_CANDIDATES // 2 + 1):
+            angles.append(base_angle + k * step)
+            angles.append(base_angle - k * step)
+
+        for angle in angles:
+            ax = target_x + APPROACH_DISTANCE * math.cos(angle)
+            ay = target_y + APPROACH_DISTANCE * math.sin(angle)
+            if self._costmap.is_free(ax, ay):
+                yaw = math.atan2(target_y - ay, target_x - ax)
                 self.get_logger().info(
-                    f'Waypoint reached, spinning 360°')
-                self._send_spin_goal(2.0 * math.pi)
+                    f'Approach pose at ({ax:.2f}, {ay:.2f}), '
+                    f'angle={math.degrees(angle):+.0f}°, '
+                    f'yaw={math.degrees(yaw):+.0f}°'
+                )
+                return ax, ay, yaw
 
-        elif self._explore_sub == 'spin':
-            if self._spin_is_complete():
-                if self._waypoint_idx >= len(EXPLORATION_WAYPOINTS):
-                    self.get_logger().info(
-                        'All waypoints explored. Transitioning to MATCH.')
-                    self._state = State.MATCH
-                    return
-                self._advance_waypoint()
-                self._explore_sub = 'drive'
+        # Every candidate blocked — fall back to natural side anyway
+        self.get_logger().warn(
+            'No free approach pose around target; using natural side.')
+        ax = target_x + APPROACH_DISTANCE * math.cos(base_angle)
+        ay = target_y + APPROACH_DISTANCE * math.sin(base_angle)
+        yaw = math.atan2(target_y - ay, target_x - ax)
+        return ax, ay, yaw
 
-    # ------------------------------------------------------------------
-    # Phase 2 — MATCH (synchronous, runs once)
-    # ------------------------------------------------------------------
-    def _tick_match(self) -> None:
-        self._targets_to_visit = self._run_match()
-        self._visit_idx = 0
+    def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
+        """Navigate to APPROACH_DISTANCE from (x, y), face it, speak, and pause."""
+        ax, ay, yaw = self._find_approach_pose(x, y)
+        self._navigate_to(ax, ay, yaw)
+
         self.get_logger().info(
-            f'MATCH produced {len(self._targets_to_visit)} targets to visit.')
-        self._state = State.VISIT if self._targets_to_visit else State.DONE
-        if self._state == State.DONE:
-            self._speak('Mission complete. No targets found.')
+            f'Arrived at {label}. Announcing for {LOOK_DURATION_S}s...')
+        self._say(sound)
+        time.sleep(LOOK_DURATION_S)
 
-    def _run_match(self) -> list[Target]:
-        targets: list[Target] = []
+    def _visit_targets(self) -> None:
+        """Visit NUM_FACES_TO_VISIT faces and NUM_RINGS_TO_VISIT rings.
 
-        # --- Face clusters ---
-        face_pts = list(self._raw_faces)
-        for idx_group in self._cluster_indexed(face_pts, CLUSTER_RADIUS):
-            pts = [face_pts[i] for i in idx_group]
-            cx = sum(p[0] for p in pts) / len(pts)
-            cy = sum(p[1] for p in pts) / len(pts)
-            targets.append(Target('face', cx, cy))
+        Re-scans the detection dicts before every visit so targets detected
+        late (during the visit phase) still get picked up. Each iteration it
+        picks the most recently discovered target (highest seen_order, a
+        global index shared by faces and rings) that hasn't been visited yet.
+        Stops once both quotas are met, or when no unvisited target remains.
+        """
+        visited_faces: set[int] = set()
+        visited_rings: set[int] = set()
+
+        while True:
+            need_faces = len(visited_faces) < NUM_FACES_TO_VISIT
+            need_rings = len(visited_rings) < NUM_RINGS_TO_VISIT
+            if not need_faces and not need_rings:
+                break  # both quotas met
+
+            # Re-scan: collect unvisited targets of the kinds still needed
+            candidates: list[tuple[str, object]] = []
+            if need_faces:
+                candidates += [('face', f) for f in self._faces.values()
+                               if f.track_id not in visited_faces]
+            if need_rings:
+                candidates += [('ring', r) for r in self._rings.values()
+                               if r.track_id not in visited_rings]
+
+            if not candidates:
+                self.get_logger().warn(
+                    f'No more targets to visit — visited '
+                    f'{len(visited_faces)}/{NUM_FACES_TO_VISIT} faces, '
+                    f'{len(visited_rings)}/{NUM_RINGS_TO_VISIT} rings.')
+                break
+
+            # Most recently discovered first (global order across faces+rings)
+            kind, target = max(candidates, key=lambda kv: kv[1].seen_order)
+
+            if kind == 'face':
+                label, phrase = 'face', 'Hello'
+                visited_faces.add(target.track_id)
+            else:
+                label = f'{target.colour} ring'
+                phrase = f'{target.colour} ring'
+                visited_rings.add(target.track_id)
+
             self.get_logger().info(
-                f'Face cluster of {len(pts)} → ({cx:.2f}, {cy:.2f})')
-
-        # --- Ring clusters ---
-        ring_pts = [(x, y) for x, y, _ in self._raw_rings]
-        for idx_group in self._cluster_indexed(ring_pts, CLUSTER_RADIUS):
-            pts     = [ring_pts[i]          for i in idx_group]
-            colours = [self._raw_rings[i][2] for i in idx_group]
-            cx = sum(p[0] for p in pts) / len(pts)
-            cy = sum(p[1] for p in pts) / len(pts)
-            colour = self._majority_vote(colours)
-            targets.append(Target('ring', cx, cy, colour))
-            self.get_logger().info(
-                f'Ring cluster of {len(pts)} → ({cx:.2f}, {cy:.2f}) colour={colour}')
-
-        return targets
-
-    @staticmethod
-    def _cluster_indexed(
-            points: list[tuple[float, float]],
-            radius: float,
-    ) -> list[list[int]]:
-        """Greedy single-linkage BFS clustering. Returns lists of indices."""
-        assigned = [-1] * len(points)
-        clusters: list[list[int]] = []
-        for i in range(len(points)):
-            if assigned[i] != -1:
-                continue
-            cid = len(clusters)
-            clusters.append([i])
-            assigned[i] = cid
-            frontier = [i]
-            while frontier:
-                fi = frontier.pop()
-                xf, yf = points[fi]
-                for j, (xj, yj) in enumerate(points):
-                    if assigned[j] != -1:
-                        continue
-                    if math.sqrt((xf - xj) ** 2 + (yf - yj) ** 2) < radius:
-                        assigned[j] = cid
-                        clusters[cid].append(j)
-                        frontier.append(j)
-        return clusters
-
-    @staticmethod
-    def _majority_vote(colours: list[str]) -> str:
-        counts: dict[str, int] = {}
-        for c in colours:
-            counts[c] = counts.get(c, 0) + 1
-        return max(counts, key=lambda k: counts[k])
+                f'Visiting {label} #{target.track_id} (n={target.count}) '
+                f'at ({target.x:.2f}, {target.y:.2f}) — '
+                f'{len(visited_faces)}/{NUM_FACES_TO_VISIT} faces, '
+                f'{len(visited_rings)}/{NUM_RINGS_TO_VISIT} rings')
+            self._approach_and_announce(target.x, target.y, label, phrase)
 
     # ------------------------------------------------------------------
-    # Phase 3 — VISIT
+    # Speech (TurtleBot4 onboard TTS listens on /speak)
     # ------------------------------------------------------------------
-    def _tick_visit(self) -> None:
-        if self._visit_idx >= len(self._targets_to_visit):
-            self._state = State.DONE
-            self._speak('Mission complete. All targets visited.')
-            self.get_logger().info('DONE — all targets visited.')
-            return
-
-        if self._visit_sub == 'drive':
-            t = self._targets_to_visit[self._visit_idx]
-            # Lazy-start: only send goal when we switch to a new target
-            if self._visit_target is not t:
-                self._visit_target = t
-                self.get_logger().info(
-                    f'Approaching target {self._visit_idx}: '
-                    f'{t.kind} at ({t.x:.2f}, {t.y:.2f})')
-                self._send_approach_goal(t)
-
-            if self._nav_is_complete():
-                self._visit_sub = 'interact'
-                self._visit_interact_start = time.monotonic()
-                self._speak_to_target(t)
-
-        elif self._visit_sub == 'interact':
-            if time.monotonic() - self._visit_interact_start < INTERACT_WAIT_S:
-                return
-            self.get_logger().info(
-                f'Finished target {self._visit_idx}. '
-                f'Moving to next.')
-            self._visit_idx += 1
-            self._visit_target = None
-            self._visit_sub = 'drive'
+    def _say(self, phrase: str) -> None:
+        """Publish a phrase for the robot's onboard TTS to speak."""
+        msg = String()
+        msg.data = phrase
+        self._speak_pub.publish(msg)
+        self.get_logger().info(f'Speaking: "{phrase}"')
 
     # ------------------------------------------------------------------
-    # Navigation helpers
+    # Blocking navigation
     # ------------------------------------------------------------------
-    def _send_approach_goal(self, target: Target) -> None:
-        self._send_nav_goal(self._make_approach_pose(target))
+    def _navigate_to(self, x: float, y: float, yaw: float) -> bool:
+        """Send a nav goal and block until it completes or times out."""
+        pose = self._make_pose(x, y, yaw)
 
-    def _advance_waypoint(self) -> None:
-        wp = EXPLORATION_WAYPOINTS[self._waypoint_idx % len(EXPLORATION_WAYPOINTS)]
-        self._waypoint_idx += 1
-        self.get_logger().info(
-            f'Navigating to waypoint {self._waypoint_idx} ({wp[0]:.1f}, {wp[1]:.1f})')
-        self._send_nav_goal(self._make_pose(*wp))
-
-    def _send_nav_goal(self, pose: PoseStamped) -> None:
-        self._nav_result_future = None
-        self._nav_goal_handle   = None
-        self._nav_sent_time     = time.monotonic()
-
-        if not self._nav_client.wait_for_server(timeout_sec=2.0):
+        if not self._nav_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().warn('Nav2 not available.')
-            return
+            return False
 
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = pose
-        future = self._nav_client.send_goal_async(goal_msg)
-        future.add_done_callback(self._nav_goal_response_cb)
+        send_future = self._nav_client.send_goal_async(goal_msg)
 
-    def _nav_goal_response_cb(self, future) -> None:
-        handle = future.result()
-        if not handle.accepted:
+        # Wait for goal acceptance
+        t0 = time.monotonic()
+        while not send_future.done():
+            time.sleep(POLL_INTERVAL_S)
+            if time.monotonic() - t0 > NAV_TIMEOUT_S:
+                self.get_logger().warn('Nav goal acceptance timed out.')
+                return False
+
+        goal_handle = send_future.result()
+        if not goal_handle.accepted:
             self.get_logger().warn('Nav goal rejected.')
-            return
-        self._nav_goal_handle   = handle
-        self._nav_result_future = handle.get_result_async()
-
-    def _nav_is_complete(self) -> bool:
-        if self._nav_result_future is None:
-            return True
-        if not self._nav_result_future.done():
-            if (self._nav_sent_time and
-                    time.monotonic() - self._nav_sent_time > WAYPOINT_TIMEOUT_S):
-                self.get_logger().warn('Waypoint timed out; skipping.')
-                self._cancel_nav()
-                return True
             return False
-        self._nav_result_future = None
+
+        # Wait for result
+        result_future = goal_handle.get_result_async()
+        while not result_future.done():
+            time.sleep(POLL_INTERVAL_S)
+            if time.monotonic() - t0 > NAV_TIMEOUT_S:
+                self.get_logger().warn('Nav goal timed out; cancelling.')
+                goal_handle.cancel_goal_async()
+                return False
+
         return True
 
-    def _cancel_nav(self) -> None:
-        if self._nav_goal_handle is not None:
-            self._nav_goal_handle.cancel_goal_async()
-            self._nav_goal_handle = None
-        self._nav_result_future = None
-
-    # ------------------------------------------------------------------
-    # Spin helpers
-    # ------------------------------------------------------------------
-    def _send_spin_goal(self, yaw: float) -> None:
-        self._spin_result_future = None
-        self._spin_goal_handle   = None
-
-        if not self._spin_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().warn('Spin action server not available; skipping spin.')
-            return
+    def _spin_360(self) -> bool:
+        """Send a 360° spin and block until done or timed out."""
+        if not self._spin_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().warn('Spin action not available; skipping.')
+            return False
 
         goal_msg = Spin.Goal()
-        goal_msg.target_yaw = yaw
-        future = self._spin_client.send_goal_async(goal_msg)
-        future.add_done_callback(self._spin_goal_response_cb)
+        goal_msg.target_yaw = 2.0 * math.pi
+        send_future = self._spin_client.send_goal_async(goal_msg)
 
-    def _spin_goal_response_cb(self, future) -> None:
-        handle = future.result()
-        if not handle.accepted:
+        t0 = time.monotonic()
+        while not send_future.done():
+            time.sleep(POLL_INTERVAL_S)
+            if time.monotonic() - t0 > SPIN_TIMEOUT_S:
+                self.get_logger().warn('Spin acceptance timed out.')
+                return False
+
+        goal_handle = send_future.result()
+        if not goal_handle.accepted:
             self.get_logger().warn('Spin goal rejected.')
-            return
-        self._spin_goal_handle   = handle
-        self._spin_result_future = handle.get_result_async()
-
-    def _spin_is_complete(self) -> bool:
-        if self._spin_result_future is None:
-            return True
-        if not self._spin_result_future.done():
             return False
-        self._spin_result_future = None
+
+        result_future = goal_handle.get_result_async()
+        while not result_future.done():
+            time.sleep(POLL_INTERVAL_S)
+            if time.monotonic() - t0 > SPIN_TIMEOUT_S:
+                self.get_logger().warn('Spin timed out; cancelling.')
+                goal_handle.cancel_goal_async()
+                return False
+
         return True
 
     # ------------------------------------------------------------------
@@ -417,83 +524,63 @@ class ControllerNode(Node):
         ps.pose.orientation = self._yaw_to_quat(yaw)
         return ps
 
-    def _make_approach_pose(self, target: Target) -> PoseStamped:
-        dx   = target.x - self._current_pose_x
-        dy   = target.y - self._current_pose_y
-        dist = math.sqrt(dx * dx + dy * dy) or 0.01
-        ux, uy = dx / dist, dy / dist
-        ax = target.x - ux * APPROACH_DISTANCE
-        ay = target.y - uy * APPROACH_DISTANCE
-        return self._make_pose(ax, ay, math.atan2(uy, ux))
-
     @staticmethod
     def _yaw_to_quat(yaw: float) -> Quaternion:
         q = quaternion_from_euler(0.0, 0.0, yaw)
         return Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])
 
     # ------------------------------------------------------------------
-    # Speech
+    # Ring markers
     # ------------------------------------------------------------------
-    def _speak_to_target(self, target: Target) -> None:
-        if target.kind == 'face':
-            self._speak('Hello!')
-        else:
-            self._speak(f'I found a {target.colour or "unknown"} ring.')
-
-    def _speak(self, text: str) -> None:
-        msg = String()
-        msg.data = text
-        self._speech_pub.publish(msg)
-
-    # ------------------------------------------------------------------
-    # Exploration markers
-    # ------------------------------------------------------------------
-    def _publish_explore_markers(self) -> None:
+    def _publish_ring_markers(self) -> None:
         now = self.get_clock().now().to_msg()
-
-        # --- Face markers (yellow spheres) ---
-        face_arr = MarkerArray()
-        for i, (x, y) in enumerate(self._raw_faces):
+        arr = MarkerArray()
+        for ring in self._rings.values():
             m = Marker()
             m.header.frame_id = 'map'
             m.header.stamp    = now
-            m.ns     = 'raw_faces'
-            m.id     = i
+            m.ns     = 'detected_rings'
+            m.id     = ring.track_id
             m.type   = Marker.SPHERE
             m.action = Marker.ADD
-            m.pose.position.x = x
-            m.pose.position.y = y
-            m.pose.position.z = 1.5
-            m.pose.orientation.w = 1.0
-            m.scale.x = m.scale.y = m.scale.z = 0.3
-            m.color = ColorRGBA(r=1.0, g=0.8, b=0.0, a=1.0)
-            face_arr.markers.append(m)
-        self._explore_face_markers_pub.publish(face_arr)
-
-        # --- Ring markers (colour-coded spheres) ---
-        ring_arr = MarkerArray()
-        for i, (x, y, colour) in enumerate(self._raw_rings):
-            m = Marker()
-            m.header.frame_id = 'map'
-            m.header.stamp    = now
-            m.ns     = 'raw_rings'
-            m.id     = i
-            m.type   = Marker.SPHERE
-            m.action = Marker.ADD
-            m.pose.position.x = x
-            m.pose.position.y = y
+            m.pose.position.x = ring.x
+            m.pose.position.y = ring.y
             m.pose.position.z = 0.5
             m.pose.orientation.w = 1.0
             m.scale.x = m.scale.y = m.scale.z = 0.3
-            m.color = _COLOUR_RGBA.get(colour, _COLOUR_RGBA['unknown'])
-            ring_arr.markers.append(m)
-        self._explore_ring_markers_pub.publish(ring_arr)
+            m.color = _COLOUR_RGBA.get(ring.colour, _COLOUR_RGBA['unknown'])
+            arr.markers.append(m)
+        self._ring_markers_pub.publish(arr)
+
+    # ------------------------------------------------------------------
+    # Face markers
+    # ------------------------------------------------------------------
+    def _publish_face_markers(self) -> None:
+        now = self.get_clock().now().to_msg()
+        arr = MarkerArray()
+        for face in self._faces.values():
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp    = now
+            m.ns     = 'detected_faces'
+            m.id     = face.track_id
+            m.type   = Marker.SPHERE
+            m.action = Marker.ADD
+            m.pose.position.x = face.x
+            m.pose.position.y = face.y
+            m.pose.position.z = 0.5
+            m.pose.orientation.w = 1.0
+            m.scale.x = m.scale.y = m.scale.z = 0.3
+            m.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            arr.markers.append(m)
+        self._face_markers_pub.publish(arr)
 
     # ------------------------------------------------------------------
     # Nav2 readiness
     # ------------------------------------------------------------------
     def _wait_for_nav2(self) -> None:
         from lifecycle_msgs.srv import GetState
+        self.get_logger().info('Waiting for Nav2...')
         for node_name in ('bt_navigator', 'amcl'):
             svc    = f'{node_name}/get_state'
             client = self.create_client(GetState, svc, callback_group=self._cbg)
@@ -503,7 +590,9 @@ class ControllerNode(Node):
             state = ''
             while state != 'active':
                 future = client.call_async(req)
-                rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+                # Poll instead of spin_until_future_complete (we're on a non-executor thread)
+                while not future.done():
+                    time.sleep(0.2)
                 if future.result():
                     state = future.result().current_state.label
                 time.sleep(1.0)
