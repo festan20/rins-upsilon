@@ -5,11 +5,14 @@ import numpy as np
 import cv2
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
+from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import OccupancyGrid
 from cv_bridge import CvBridgeError
 from sensor_msgs.msg import CompressedImage, Image
+import sensor_msgs_py.point_cloud2 as pc2
 import tf2_ros
 import tf2_geometry_msgs  # noqa: F401 — registers transform methods
 
@@ -48,6 +51,94 @@ class MapBoundsTracker:
             return True
         return (self._x_min <= x <= self._x_max and
                 self._y_min <= y <= self._y_max)
+
+
+class OccupancyGridMap:
+    """Subscribes to /map and lets you raycast against the static walls.
+
+    Faces and rings live on walls, so a detection's true position is the first
+    occupied cell along the camera bearing. This removes the dependence on noisy
+    depth for range — we only need the (reliable) bearing from the pixel, then
+    snap to the wall.
+    """
+
+    def __init__(self, node: Node, topic: str = '/map'):
+        self._grid: np.ndarray | None = None  # (H, W) int8, -1 unknown / 0 free / 100 occ
+        self._res = 0.0
+        self._ox = 0.0
+        self._oy = 0.0
+        self._h = 0
+        self._w = 0
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        node.create_subscription(OccupancyGrid, topic, self._map_cb, qos)
+
+    def _map_cb(self, msg: OccupancyGrid) -> None:
+        info = msg.info
+        self._res = info.resolution
+        self._ox = info.origin.position.x
+        self._oy = info.origin.position.y
+        self._h = info.height
+        self._w = info.width
+        self._grid = np.asarray(msg.data, dtype=np.int8).reshape(self._h, self._w)
+
+    @property
+    def ready(self) -> bool:
+        return self._grid is not None
+
+    def _cell(self, x: float, y: float) -> tuple[int, int]:
+        col = int((x - self._ox) / self._res)
+        row = int((y - self._oy) / self._res)
+        return col, row
+
+    def is_occupied(self, x: float, y: float, occ_thresh: int = 50) -> bool:
+        if self._grid is None:
+            return False
+        col, row = self._cell(x, y)
+        if 0 <= row < self._h and 0 <= col < self._w:
+            return self._grid[row, col] >= occ_thresh
+        return False
+
+    def raycast(self, x0: float, y0: float, dx: float, dy: float,
+                max_range: float = 10.0, occ_thresh: int = 50,
+                skip_near: float = 0.15):
+        """March from (x0, y0) along unit direction (dx, dy) in map frame.
+
+        Returns (x, y) of the first occupied cell hit, or None if the ray leaves
+        the map or reaches `max_range` without hitting a wall. `skip_near` skips
+        the first few centimetres so the robot's own start cell can't self-hit.
+        """
+        if self._grid is None or self._res <= 0.0:
+            return None
+        norm = math.hypot(dx, dy)
+        if norm < 1e-6:
+            return None
+        dx, dy = dx / norm, dy / norm
+        step = self._res * 0.5
+        n = int(max_range / step)
+        dist = skip_near
+        for _ in range(n):
+            dist += step
+            if dist > max_range:
+                break
+            x = x0 + dx * dist
+            y = y0 + dy * dist
+            col, row = self._cell(x, y)
+            if not (0 <= row < self._h and 0 <= col < self._w):
+                return None
+            if self._grid[row, col] >= occ_thresh:
+                return (x, y)
+        return None
+
+    def is_in_bounds(self, x: float, y: float) -> bool:
+        if self._grid is None:
+            return True
+        return (self._ox <= x <= self._ox + self._w * self._res and
+                self._oy <= y <= self._oy + self._h * self._res)
 
 
 def decode_compressed_depth(msg) -> np.ndarray | None:
@@ -90,16 +181,41 @@ def decode_depth_message(msg, bridge) -> np.ndarray | None:
 
 
 class DepthCameraGeometry:
-    """Extract 3D world points from a depth image + camera intrinsics at given pixel (u, v)."""
+    """Extract 3D points at a pixel (u, v) from either:
+      * a depth image + camera intrinsics  (update_depth + update_intrinsics), or
+      * an organized PointCloud2           (update) — preferred when available.
+
+    When an organized cloud has been provided via ``update``, ``get_point`` reads
+    the XYZ directly from the cloud (no intrinsics needed). Otherwise it falls
+    back to deprojecting the depth image with the cached intrinsics.
+    """
 
     def __init__(self, patch_radius: int = 3):
         self.patch_radius = patch_radius
         self._depth: np.ndarray | None = None
+        self._xyz: np.ndarray | None = None   # (H, W, 3) organized cloud, camera frame
         self._fx: float = 0.0
         self._fy: float = 0.0
         self._cx: float = 0.0
         self._cy: float = 0.0
         self._has_intrinsics = False
+
+    def update(self, cloud_msg) -> None:
+        """Cache an organized PointCloud2 as an (H, W, 3) XYZ array (camera frame).
+
+        Also exposes the Z channel as a depth image for masking. No-op (clears
+        cloud state) if the cloud is unorganized (height <= 1).
+        """
+        h, w = cloud_msg.height, cloud_msg.width
+        if h <= 1 or w <= 1:
+            self._xyz = None
+            return
+        arr = pc2.read_points_numpy(
+            cloud_msg, field_names=('x', 'y', 'z'), reshape_organized_cloud=True)
+        self._xyz = arr.astype(np.float32).reshape(h, w, 3)
+        depth = self._xyz[:, :, 2].copy()
+        depth[~np.isfinite(depth)] = 0.0
+        self._depth = depth
 
     def update_intrinsics(self, camera_info_msg) -> None:
         """Cache camera intrinsics from a CameraInfo message."""
@@ -121,9 +237,26 @@ class DepthCameraGeometry:
     def get_point(self, u: int, v: int):
         """Return (x, y, z) in camera frame at pixel (u, v), or None if invalid.
 
-        Uses depth image + camera intrinsics to deproject.
-        Samples a small patch around (u, v) and returns the median of valid points.
+        Cloud mode (organized PointCloud2 via ``update``): reads XYZ directly.
+        Image mode: deprojects the depth image with the cached intrinsics.
+        Both sample a small patch around (u, v) and return the median valid point.
         """
+        # --- cloud mode ---
+        if self._xyz is not None:
+            h, w = self._xyz.shape[:2]
+            r = self.patch_radius
+            v_lo, v_hi = max(0, v - r), min(h, v + r + 1)
+            u_lo, u_hi = max(0, u - r), min(w, u + r + 1)
+            patch = self._xyz[v_lo:v_hi, u_lo:u_hi].reshape(-1, 3)
+            valid = np.isfinite(patch).all(axis=1) & (patch[:, 2] > 0.0)
+            if not np.any(valid):
+                return None
+            p = patch[valid]
+            return (float(np.median(p[:, 0])),
+                    float(np.median(p[:, 1])),
+                    float(np.median(p[:, 2])))
+
+        # --- image mode ---
         if self._depth is None or not self._has_intrinsics:
             return None
 
@@ -152,18 +285,57 @@ class DepthCameraGeometry:
 
         return (float(np.median(xs)), float(np.median(ys)), float(np.median(depths)))
 
+    @property
+    def has_intrinsics(self) -> bool:
+        return self._has_intrinsics
+
+    def pixel_to_ray(self, u: float, v: float):
+        """Return a unit ray direction (x, y, z) in the camera optical frame
+        pointing through pixel (u, v). Independent of depth. None if no intrinsics.
+        """
+        if not self._has_intrinsics:
+            return None
+        x = (u - self._cx) / self._fx
+        y = (v - self._cy) / self._fy
+        z = 1.0
+        n = math.sqrt(x * x + y * y + z * z)
+        return (x / n, y / n, z / n)
+
 
 class TF2Helper:
-    """Thin wrapper around tf2_ros for point transforms."""
+    """Thin wrapper around tf2_ros for point transforms.
+
+    The listener runs on its OWN spin thread (``spin_thread=True``) so the TF
+    buffer keeps filling even while a detector's callback is busy with heavy CV
+    work on a single-threaded executor. Without this, ``/tf`` gets starved and
+    lookups at a message's (often slightly stale) stamp fail with "no TF".
+    """
 
     def __init__(self, node: Node):
         self.buffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self.buffer, node)
+        self.listener = tf2_ros.TransformListener(self.buffer, node, spin_thread=True)
 
     def transform_point(self, point_stamped: PointStamped, target_frame: str):
-        """Transform a PointStamped to target_frame. Returns transformed PointStamped or None."""
+        """Transform a PointStamped to target_frame, or None.
+
+        Tries the point's own stamp first; if that exact time isn't available
+        (e.g. a laggy camera cloud whose stamp predates the buffered TF), retries
+        against the latest available transform (zero stamp). Fine for a slow /
+        teleop robot where the latest transform ~ the capture-time transform.
+        """
         try:
-            return self.buffer.transform(point_stamped, target_frame, timeout=rclpy.duration.Duration(seconds=0.5))
+            return self.buffer.transform(
+                point_stamped, target_frame, timeout=Duration(seconds=0.2))
+        except Exception:
+            pass
+        # Fallback: latest available transform (stamp = 0).
+        try:
+            latest = PointStamped()
+            latest.header.frame_id = point_stamped.header.frame_id
+            latest.header.stamp = Time().to_msg()
+            latest.point = point_stamped.point
+            return self.buffer.transform(
+                latest, target_frame, timeout=Duration(seconds=0.2))
         except Exception:
             return None
 

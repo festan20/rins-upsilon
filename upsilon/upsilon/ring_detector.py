@@ -564,7 +564,7 @@ class RingDetectorNode(Node):
             t.pose.position.z = 0.7
             t.pose.orientation.w = 1.0
             t.scale.z = 0.15
-            t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            t.color = ColorRGBA(r=0.0, g=0.0, b=0.0, a=1.0)
             t.text = f'{colour} (n={count})'
             arr.markers.append(t)
 
