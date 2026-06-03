@@ -26,8 +26,11 @@ setup(
     entry_points={
         'console_scripts': [
             'face_detector = upsilon.face_detector:main',
+            'face_detector_task2 = upsilon.face_detector_task2:main',
             'ring_detector = upsilon.ring_detector:main',
             'ring_detector2 = upsilon.ring_detector2:main',
+            'ring_detector_task2 = upsilon.ring_detector_task2:main',
+            'cylinder_detector_task2 = upsilon.cylinder_detector_task2:main',
             'blue_line_detector = upsilon.blue_line_detector:main',
             'blue_line_follower = upsilon.blue_line_follower:main',
             'controller = upsilon.controller:main',

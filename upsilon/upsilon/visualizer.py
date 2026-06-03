@@ -35,12 +35,18 @@ class VisualizerNode(Node):
                 ('compressed_rgb', False),
                 ('top_rgb_topic', '/top_camera/rgb/preview/image_raw'),
                 ('top_compressed_rgb', False),
+                ('face_debug_topic', '/face_detector/debug'),
+                ('ring_debug_topic', '/ring_detector/debug'),
+                ('cylinder_debug_topic', ''),
             ],
         )
         self.rgb_topic = self.get_parameter('rgb_topic').get_parameter_value().string_value
         self.compressed_rgb = self.get_parameter('compressed_rgb').get_parameter_value().bool_value
         self.top_rgb_topic = self.get_parameter('top_rgb_topic').get_parameter_value().string_value
         self.top_compressed_rgb = self.get_parameter('top_compressed_rgb').get_parameter_value().bool_value
+        self.face_debug_topic = self.get_parameter('face_debug_topic').get_parameter_value().string_value
+        self.ring_debug_topic = self.get_parameter('ring_debug_topic').get_parameter_value().string_value
+        self.cylinder_debug_topic = self.get_parameter('cylinder_debug_topic').get_parameter_value().string_value
         self.bridge = CvBridge()
 
         # Only subscribe to compressed RGB (small) and local debug topics
@@ -53,19 +59,26 @@ class VisualizerNode(Node):
             top_rgb_msg_type, self.top_rgb_topic,
             self._top_rgb_cb, QOS_LATEST)
         self.create_subscription(
-            Image, '/face_detector/debug',
+            Image, self.face_debug_topic,
             self._face_debug_cb, QOS_LATEST)
         self.create_subscription(
-            Image, '/ring_detector/debug',
+            Image, self.ring_debug_topic,
             self._ring_debug_cb, QOS_LATEST)
 
+        window_names = ['Camera POV', 'Top Camera POV', 'Face Detection', 'Ring Detection']
+        if self.cylinder_debug_topic:
+            self.create_subscription(
+                Image, self.cylinder_debug_topic,
+                self._cylinder_debug_cb, QOS_LATEST)
+            window_names.append('Cylinder Detection')
+
         # Create windows
-        for name in ['Camera POV', 'Top Camera POV', 'Face Detection', 'Ring Detection']:
+        for name in window_names:
             cv2.namedWindow(name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(name, WINDOW_W, WINDOW_H)
 
         self.create_timer(0.03, self._gui_tick)
-        self.get_logger().info('Visualizer ready — 4 windows.')
+        self.get_logger().info(f'Visualizer ready — {len(window_names)} windows.')
 
     def _rgb_cb(self, msg: Image | CompressedImage) -> None:
         try:
@@ -100,6 +113,13 @@ class VisualizerNode(Node):
         except CvBridgeError:
             return
         cv2.imshow('Ring Detection', frame)
+
+    def _cylinder_debug_cb(self, msg: Image) -> None:
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError:
+            return
+        cv2.imshow('Cylinder Detection', frame)
 
     def _gui_tick(self) -> None:
         cv2.waitKey(1)
