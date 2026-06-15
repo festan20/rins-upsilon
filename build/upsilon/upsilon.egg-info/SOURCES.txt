@@ -24,6 +24,8 @@ sounds/hello.mp3
 sounds/orange.mp3
 sounds/red.mp3
 upsilon/__init__.py
+upsilon/anomaly_detector.py
+upsilon/anomaly_model.py
 upsilon/blue_line_detector.py
 upsilon/blue_line_follower.py
 upsilon/camera_viewer.py
