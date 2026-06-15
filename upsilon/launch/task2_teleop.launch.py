@@ -25,6 +25,7 @@ Usage
 MOVING top camera:
 ros2 topic pub --once /arm_command std_msgs/msg/String "data: 'manual:[0.0, 0.6, 0.5, 2.0]'"
 
+QR topic: ros2 topic echo /qr_instructions_task2
 """
 
 from ament_index_python.packages import get_package_share_directory
