@@ -1,4 +1,4 @@
-"""Blue line detector for top-camera based following.
+"""Blue line detector with split follow/junction camera inputs.
 
 Publishes lightweight signals for a follower state machine:
   - /blue_line/center_error      (std_msgs/Float32)  in [-1, 1]
@@ -11,7 +11,11 @@ Publishes lightweight signals for a follower state machine:
 The detector is intentionally simple and robust:
   - HSV thresholding for blue
   - morphological cleanup
-  - row-scan segmentation for steering / branch detection
+    - row-scan segmentation for steering / branch detection
+
+Camera usage:
+    - Follow path (center_error/line_visible/dead_end): front camera topics.
+    - Junction path (branch_offsets/junction_candidates): top camera topics.
 """
 
 import math
@@ -41,6 +45,9 @@ class BlueLineDetectorNode(Node):
                 ('rgb_topic', '/top_camera/rgb/preview/image_raw'),
                 ('depth_topic', '/top_camera/rgb/preview/depth'),
                 ('camera_info_topic', '/top_camera/rgb/preview/camera_info'),
+                ('junction_rgb_topic', '/top_camera/rgb/preview/image_raw'),
+                ('junction_depth_topic', '/top_camera/rgb/preview/depth'),
+                ('junction_camera_info_topic', '/top_camera/rgb/preview/camera_info'),
                 ('compressed_topics', False),
                 ('hsv_h_min', 95),
                 ('hsv_h_max', 130),
@@ -59,6 +66,15 @@ class BlueLineDetectorNode(Node):
         self.rgb_topic = self.get_parameter('rgb_topic').get_parameter_value().string_value
         self.depth_topic = self.get_parameter('depth_topic').get_parameter_value().string_value
         self.camera_info_topic = self.get_parameter('camera_info_topic').get_parameter_value().string_value
+        self.junction_rgb_topic = self.get_parameter(
+            'junction_rgb_topic'
+        ).get_parameter_value().string_value
+        self.junction_depth_topic = self.get_parameter(
+            'junction_depth_topic'
+        ).get_parameter_value().string_value
+        self.junction_camera_info_topic = self.get_parameter(
+            'junction_camera_info_topic'
+        ).get_parameter_value().string_value
         self.compressed_topics = self.get_parameter('compressed_topics').get_parameter_value().bool_value
 
         self.hsv_lo = np.array([
@@ -79,14 +95,17 @@ class BlueLineDetectorNode(Node):
         self.dead_end_timeout_sec = self.get_parameter('dead_end_timeout_sec').get_parameter_value().double_value
 
         self.bridge = CvBridge()
-        self.depth_cam = DepthCameraGeometry(patch_radius=2)
+        self.follow_depth_cam = DepthCameraGeometry(patch_radius=2)
+        self.junction_depth_cam = DepthCameraGeometry(patch_radius=2)
         self.tf2 = TF2Helper(self)
 
-        self._latest_depth_msg = None
-        self._depth_frame_id = 'camera_depth_optical_frame'
+        self._latest_follow_depth_msg = None
+        self._latest_junction_depth_msg = None
+        self._junction_depth_frame_id = 'camera_depth_optical_frame'
         self._last_cx = None
         self._last_visible_time = 0.0
-        self._last_process_time = 0.0
+        self._last_follow_process_time = 0.0
+        self._last_junction_process_time = 0.0
         self._process_interval = 1.0 / max(1.0, process_hz)
 
         qos = QoSProfile(
@@ -99,9 +118,17 @@ class BlueLineDetectorNode(Node):
         rgb_msg_type = CompressedImage if self.compressed_topics else Image
         depth_msg_type = CompressedImage if self.compressed_topics else Image
 
-        self.create_subscription(rgb_msg_type, self.rgb_topic, self._rgb_cb, qos)
-        self.create_subscription(depth_msg_type, self.depth_topic, self._depth_cb, qos)
-        self.create_subscription(CameraInfo, self.camera_info_topic, self._caminfo_cb, qos)
+        self.create_subscription(rgb_msg_type, self.rgb_topic, self._follow_rgb_cb, qos)
+        self.create_subscription(depth_msg_type, self.depth_topic, self._follow_depth_cb, qos)
+        self.create_subscription(CameraInfo, self.camera_info_topic, self._follow_caminfo_cb, qos)
+        self.create_subscription(rgb_msg_type, self.junction_rgb_topic, self._junction_rgb_cb, qos)
+        self.create_subscription(depth_msg_type, self.junction_depth_topic, self._junction_depth_cb, qos)
+        self.create_subscription(
+            CameraInfo,
+            self.junction_camera_info_topic,
+            self._junction_caminfo_cb,
+            qos,
+        )
 
         self.center_error_pub = self.create_publisher(Float32, '/blue_line/center_error', 10)
         self.visible_pub = self.create_publisher(Bool, '/blue_line/line_visible', 10)
@@ -110,20 +137,29 @@ class BlueLineDetectorNode(Node):
         self.junction_candidates_pub = self.create_publisher(PoseArray, '/blue_line/junction_candidates', 10)
         self.debug_pub = self.create_publisher(Image, '/blue_line/debug', 10)
 
-        self.get_logger().info('Blue line detector ready.')
+        self.get_logger().info(
+            'Blue line detector ready. '
+            f'follow_rgb={self.rgb_topic}, junction_rgb={self.junction_rgb_topic}'
+        )
 
-    def _caminfo_cb(self, msg: CameraInfo) -> None:
-        self.depth_cam.update_intrinsics(msg)
-        self._depth_frame_id = msg.header.frame_id
+    def _follow_caminfo_cb(self, msg: CameraInfo) -> None:
+        self.follow_depth_cam.update_intrinsics(msg)
 
-    def _depth_cb(self, msg: Image | CompressedImage) -> None:
-        self._latest_depth_msg = msg
+    def _junction_caminfo_cb(self, msg: CameraInfo) -> None:
+        self.junction_depth_cam.update_intrinsics(msg)
+        self._junction_depth_frame_id = msg.header.frame_id
 
-    def _rgb_cb(self, msg: Image | CompressedImage) -> None:
+    def _follow_depth_cb(self, msg: Image | CompressedImage) -> None:
+        self._latest_follow_depth_msg = msg
+
+    def _junction_depth_cb(self, msg: Image | CompressedImage) -> None:
+        self._latest_junction_depth_msg = msg
+
+    def _follow_rgb_cb(self, msg: Image | CompressedImage) -> None:
         now = self.get_clock().now().nanoseconds / 1e9
-        if now - self._last_process_time < self._process_interval:
+        if now - self._last_follow_process_time < self._process_interval:
             return
-        self._last_process_time = now
+        self._last_follow_process_time = now
 
         try:
             if isinstance(msg, CompressedImage):
@@ -134,12 +170,34 @@ class BlueLineDetectorNode(Node):
             self.get_logger().error(f'RGB convert failed: {e}')
             return
 
-        if self._latest_depth_msg is not None:
-            depth = decode_depth_message(self._latest_depth_msg, self.bridge)
+        if self._latest_follow_depth_msg is not None:
+            depth = decode_depth_message(self._latest_follow_depth_msg, self.bridge)
             if depth is not None:
-                self.depth_cam.update_depth(depth)
+                self.follow_depth_cam.update_depth(depth)
 
-        self._process_frame(bgr)
+        self._process_follow_frame(bgr)
+
+    def _junction_rgb_cb(self, msg: Image | CompressedImage) -> None:
+        now = self.get_clock().now().nanoseconds / 1e9
+        if now - self._last_junction_process_time < self._process_interval:
+            return
+        self._last_junction_process_time = now
+
+        try:
+            if isinstance(msg, CompressedImage):
+                bgr = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+            else:
+                bgr = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError as e:
+            self.get_logger().error(f'Junction RGB convert failed: {e}')
+            return
+
+        if self._latest_junction_depth_msg is not None:
+            depth = decode_depth_message(self._latest_junction_depth_msg, self.bridge)
+            if depth is not None:
+                self.junction_depth_cam.update_depth(depth)
+
+        self._process_junction_frame(bgr)
 
     @staticmethod
     def _extract_segments(mask_row: np.ndarray, min_width: int) -> list[tuple[int, int, int]]:
@@ -167,13 +225,13 @@ class BlueLineDetectorNode(Node):
         out.header.frame_id = 'map'
 
         for cx in centers:
-            pt_cam = self.depth_cam.get_point(cx, y_scan)
+            pt_cam = self.junction_depth_cam.get_point(cx, y_scan)
             if pt_cam is None:
                 continue
 
             ps = PointStamped()
             ps.header.stamp = out.header.stamp
-            ps.header.frame_id = self._depth_frame_id
+            ps.header.frame_id = self._junction_depth_frame_id
             ps.point.x = pt_cam[0]
             ps.point.y = pt_cam[1]
             ps.point.z = pt_cam[2]
@@ -191,7 +249,7 @@ class BlueLineDetectorNode(Node):
 
         self.junction_candidates_pub.publish(out)
 
-    def _process_frame(self, bgr: np.ndarray) -> None:
+    def _process_follow_frame(self, bgr: np.ndarray) -> None:
         h, w = bgr.shape[:2]
 
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -223,18 +281,10 @@ class BlueLineDetectorNode(Node):
         now = self.get_clock().now().nanoseconds / 1e9
         dead_end = (now - self._last_visible_time) > self.dead_end_timeout_sec
 
-        junc_segments = self._extract_segments(mask[y_junc, :] > 0, self.min_segment_width_px)
-        branch_centers = [s[2] for s in junc_segments]
-        branch_offsets = [float((cx - (w / 2.0)) / (w / 2.0)) for cx in branch_centers]
-
         # Publish primary control signals.
         self.center_error_pub.publish(Float32(data=float(max(-1.0, min(1.0, center_error)))))
         self.visible_pub.publish(Bool(data=bool(line_visible)))
         self.dead_end_pub.publish(Bool(data=bool(dead_end)))
-        self.branch_offsets_pub.publish(Float32MultiArray(data=branch_offsets))
-
-        if len(branch_centers) >= 2:
-            self._publish_candidates(y_junc, branch_centers)
 
         # Debug image overlay.
         dbg = bgr.copy()
@@ -244,19 +294,37 @@ class BlueLineDetectorNode(Node):
 
         for seg in follow_segments:
             cv2.line(dbg, (seg[0], y_follow), (seg[1], y_follow), (255, 0, 0), 2)
-        for seg in junc_segments:
-            cv2.line(dbg, (seg[0], y_junc), (seg[1], y_junc), (0, 0, 255), 2)
 
         if chosen_cx is not None:
             cv2.circle(dbg, (chosen_cx, y_follow), 5, (0, 255, 0), -1)
 
-        txt = f'visible={line_visible} dead_end={dead_end} branches={len(branch_centers)} err={center_error:+.2f}'
+        txt = f'visible={line_visible} dead_end={dead_end} err={center_error:+.2f}'
         cv2.putText(dbg, txt, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
         try:
             self.debug_pub.publish(self.bridge.cv2_to_imgmsg(dbg, encoding='bgr8'))
         except CvBridgeError:
             pass
+
+    def _process_junction_frame(self, bgr: np.ndarray) -> None:
+        h, w = bgr.shape[:2]
+
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, self.hsv_lo, self.hsv_hi)
+
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+
+        y_junc = max(0, min(h - 1, int(h * self.junction_scan_ratio)))
+        junc_segments = self._extract_segments(mask[y_junc, :] > 0, self.min_segment_width_px)
+        branch_centers = [s[2] for s in junc_segments]
+        branch_offsets = [float((cx - (w / 2.0)) / (w / 2.0)) for cx in branch_centers]
+
+        self.branch_offsets_pub.publish(Float32MultiArray(data=branch_offsets))
+
+        if len(branch_centers) >= 2:
+            self._publish_candidates(y_junc, branch_centers)
 
 
 def main(args=None):

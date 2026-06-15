@@ -14,7 +14,7 @@ Usage
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -81,6 +81,14 @@ for axis in ['x', 'y', 'z', 'yaw']:
             description=f'Initial robot {axis} pose',
         )
     )
+
+# Shared camera parameters for camera-based detectors.
+CAM_PARAMS = [
+    {'rgb_topic': '/oakd/rgb/preview/image_raw'},
+    {'depth_topic': '/oakd/rgb/preview/depth'},
+    {'camera_info_topic': '/oakd/rgb/preview/camera_info'},
+    {'compressed_topics': False},
+]
 
 
 def generate_launch_description():
@@ -202,41 +210,60 @@ def generate_launch_description():
         ],
     )
 
-    face_detector = Node(
-        package='upsilon',
-        executable='face_detector',
-        name='face_detector',
-        output='screen',
-        parameters=[
-            {'device': ''},
-            {'use_sim_time': LaunchConfiguration('use_sim_time')},
-            {'rgb_topic': '/oakd/rgb/preview/image_raw'},
-            {'depth_topic': '/oakd/rgb/preview/depth'},
-            {'camera_info_topic': '/oakd/rgb/preview/camera_info'},
-            {'compressed_topics': False},
+    arm_control = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([pkg_dis_tutorial7, 'launch', 'control.launch.py'])
+        ),
+        launch_arguments=[
+            ('namespace', LaunchConfiguration('namespace')),
         ],
     )
 
-    ring_detector = Node(
-        package='upsilon',
-        executable='ring_detector2',
-        name='ring_detector2',
+    arm_mover = Node(
+        package='dis_tutorial7',
+        executable='arm_mover_actions.py',
+        name='arm_mover_actions',
         output='screen',
-        parameters=[
-            {'use_sim_time': LaunchConfiguration('use_sim_time')},
-            {'rgb_topic': '/oakd/rgb/preview/image_raw'},
-            {'depth_topic': '/oakd/rgb/preview/depth'},
-            {'camera_info_topic': '/oakd/rgb/preview/camera_info'},
-            {'compressed_topics': False},
-        ],
-        remappings=[
-            ('/ring_detector2/debug', '/ring_detector/debug'),
-            ('/ring_detector2/threshold', '/ring_detector/threshold'),
-            ('/ring_detector2/contour', '/ring_detector/contour'),
-            ('/detected_rings2', '/detected_rings'),
-            ('/ring_markers2', '/ring_markers'),
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+
+    top_camera_init_pose = TimerAction(
+        period=8.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    'ros2', 'topic', 'pub', '--once',
+                    '/arm_command', 'std_msgs/msg/String',
+                    "data: 'manual:[0.0, 0.6, 0.5, 2.0]'",
+                ],
+                output='screen',
+            )
         ],
     )
+
+    face_detector = Node(
+        package='upsilon',
+        executable='face_detector_task2',
+        name='face_detector_task2',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
+    )
+
+    # ring_detector = Node(
+    #     package='upsilon',
+    #     executable='ring_detector_task2',
+    #     name='ring_detector_task2',
+    #     output='screen',
+    #     parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
+    # )
+
+    # cylinder_detector = Node(
+    #     package='upsilon',
+    #     executable='cylinder_detector_task2',
+    #     name='cylinder_detector_task2',
+    #     output='screen',
+    #     parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
+    # )
 
     speech = Node(
         package='upsilon',
@@ -262,6 +289,9 @@ def generate_launch_description():
             {'use_sim_time': LaunchConfiguration('use_sim_time')},
             {'rgb_topic': '/oakd/rgb/preview/image_raw'},
             {'compressed_rgb': False},
+            {'face_debug_topic': '/face_detector_task2/debug'},
+            {'ring_debug_topic': '/ring_detector_task2/debug'},
+            {'cylinder_debug_topic': '/cylinder_detector_task2/debug'},
         ],
     )
 
@@ -275,6 +305,9 @@ def generate_launch_description():
             {'rgb_topic': '/oakd/rgb/preview/image_raw'},
             {'depth_topic': '/oakd/rgb/preview/depth'},
             {'camera_info_topic': '/oakd/rgb/preview/camera_info'},
+            {'junction_rgb_topic': '/top_camera/rgb/preview/image_raw'},
+            {'junction_depth_topic': '/top_camera/rgb/preview/depth'},
+            {'junction_camera_info_topic': '/top_camera/rgb/preview/camera_info'},
             {'compressed_topics': False},
         ],
         condition=IfCondition(LaunchConfiguration('blue_line_following')),
@@ -304,8 +337,12 @@ def generate_launch_description():
     ld.add_action(keepout_filter_info_server)
     ld.add_action(keepout_lifecycle_manager)
     ld.add_action(nav2)
+    ld.add_action(arm_control)
+    ld.add_action(arm_mover)
+    ld.add_action(top_camera_init_pose)
     ld.add_action(face_detector)
-    ld.add_action(ring_detector)
+    # ld.add_action(ring_detector)
+    # ld.add_action(cylinder_detector)
     ld.add_action(speech)
     ld.add_action(controller)
     ld.add_action(visualizer)

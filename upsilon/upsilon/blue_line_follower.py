@@ -1,13 +1,10 @@
-"""Blue line follower with branch exploration queue.
+"""Blue line follower with left-first junction policy.
 
 This node consumes outputs from blue_line_detector and drives /cmd_vel.
-It implements a practical BFS-style branch policy:
-  - At a new junction, choose the leftmost branch immediately.
-  - Enqueue remaining branches (left->right) for later exploration.
-  - At dead end: stop, rotate 180, and backtrack on the line.
-  - While backtracking, when reaching a junction that has queued branches,
-    take the next queued branch.
-  - Complete when dead-end is reached and queue is empty.
+Policy summary:
+    - At each junction, always commit to the leftmost branch (robot-local image left).
+    - At dead end without nearby face: rotate and continue following.
+    - At dead end with nearby face: stop and mark blue-line section complete.
 
 Notes
 -----
@@ -26,7 +23,7 @@ from rclpy.parameter import Parameter
 from rcl_interfaces.msg import SetParametersResult
 
 from std_msgs.msg import Bool, Float32, Float32MultiArray
-from geometry_msgs.msg import TwistStamped, PoseArray, PoseWithCovarianceStamped
+from geometry_msgs.msg import TwistStamped, PoseArray, PoseWithCovarianceStamped, PointStamped
 from std_srvs.srv import SetBool
 
 
@@ -66,10 +63,14 @@ class BlueLineFollowerNode(Node):
                 ('blocked_dead_end_min_cmd_lin', 0.14),
                 ('blocked_dead_end_max_abs_ang', 0.22),
                 ('branch_commit_sec', 1.2),
+                ('junction_pause_sec', 1.0),
                 ('rotate_speed', 0.6),
                 ('rotate_duration_sec', 3.2),
                 ('junction_match_dist', 0.45),
                 ('junction_rearm_dist', 0.35),
+                ('face_stop_enabled', True),
+                ('face_stop_radius_m', 0.8),
+                ('face_max_age_sec', 30.0),
                 ('active', False),
             ],
         )
@@ -92,10 +93,14 @@ class BlueLineFollowerNode(Node):
             'blocked_dead_end_max_abs_ang'
         ).get_parameter_value().double_value
         self.branch_commit_sec = self.get_parameter('branch_commit_sec').get_parameter_value().double_value
+        self.junction_pause_sec = self.get_parameter('junction_pause_sec').get_parameter_value().double_value
         self.rotate_speed = self.get_parameter('rotate_speed').get_parameter_value().double_value
         self.rotate_duration_sec = self.get_parameter('rotate_duration_sec').get_parameter_value().double_value
         self.junction_match_dist = self.get_parameter('junction_match_dist').get_parameter_value().double_value
         self.junction_rearm_dist = self.get_parameter('junction_rearm_dist').get_parameter_value().double_value
+        self.face_stop_enabled = self.get_parameter('face_stop_enabled').get_parameter_value().bool_value
+        self.face_stop_radius_m = self.get_parameter('face_stop_radius_m').get_parameter_value().double_value
+        self.face_max_age_sec = self.get_parameter('face_max_age_sec').get_parameter_value().double_value
         self.active = self.get_parameter('active').get_parameter_value().bool_value
 
         self.center_error = 0.0
@@ -108,6 +113,8 @@ class BlueLineFollowerNode(Node):
 
         self._state = 'FOLLOW' if self.active else 'IDLE'
         self._rotate_until = 0.0
+        self._junction_pause_until = 0.0
+        self._junction_turn_until = 0.0
         self._branch_bias = 0.0
         self._branch_bias_until = 0.0
 
@@ -122,6 +129,7 @@ class BlueLineFollowerNode(Node):
         self._seen_any_junction = False
         self._blocked_window_start_t = 0.0
         self._blocked_window_start_pose: tuple[float, float] | None = None
+        self._face_tracks: dict[int, tuple[float, float, float]] = {}
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -136,6 +144,7 @@ class BlueLineFollowerNode(Node):
         self.create_subscription(Float32MultiArray, '/blue_line/branch_offsets', self._branch_offsets_cb, qos)
         self.create_subscription(PoseArray, '/blue_line/junction_candidates', self._junction_cb, qos)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self._amcl_cb, qos)
+        self.create_subscription(PointStamped, '/detected_faces_task2', self._face_cb, qos)
 
         self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_vel_topic, 10)
         self._enable_srv = self.create_service(SetBool, '/blue_line/set_active', self._set_active_cb)
@@ -153,6 +162,8 @@ class BlueLineFollowerNode(Node):
         self._state = 'FOLLOW' if self.active else 'IDLE'
         self._blocked_window_start_pose = None
         self._blocked_window_start_t = 0.0
+        self._junction_pause_until = 0.0
+        self._junction_turn_until = 0.0
         if not self.active:
             self._publish_cmd(0.0, 0.0)
 
@@ -192,6 +203,17 @@ class BlueLineFollowerNode(Node):
         self._pose_x = msg.pose.pose.position.x
         self._pose_y = msg.pose.pose.position.y
         self._have_pose = True
+
+    def _face_cb(self, msg: PointStamped) -> None:
+        parts = msg.header.frame_id.split('/')
+        if len(parts) < 3 or parts[0] != 'map':
+            return
+        try:
+            track_id = int(parts[1])
+        except ValueError:
+            return
+        now = self.get_clock().now().nanoseconds / 1e9
+        self._face_tracks[track_id] = (msg.point.x, msg.point.y, now)
 
     @staticmethod
     def _dist(a_x: float, a_y: float, b_x: float, b_y: float) -> float:
@@ -238,14 +260,6 @@ class BlueLineFollowerNode(Node):
                 for i, pt in enumerate(branch_points):
                     st.branch_points[i] = pt
             if n_branches > st.total_branches:
-                # Extend pending list for newly observed branches.
-                for i in range(st.total_branches, n_branches):
-                    st.pending.append(i)
-                    task = BranchTask(jid=jid, branch_idx=i)
-                    if branch_points and i < len(branch_points):
-                        task.target_x = branch_points[i][0]
-                        task.target_y = branch_points[i][1]
-                    self._queue.append(task)
                 st.total_branches = n_branches
             return jid
 
@@ -253,18 +267,9 @@ class BlueLineFollowerNode(Node):
         self._next_jid += 1
         st = JunctionState(jid=jid, x=x, y=y, total_branches=n_branches)
         for i in range(n_branches):
-            st.pending.append(i)
             if branch_points and i < len(branch_points):
                 st.branch_points[i] = branch_points[i]
         self._junctions[jid] = st
-
-        # BFS queue: keep branches [1..] for later, branch 0 taken now.
-        for i in range(1, n_branches):
-            task = BranchTask(jid=jid, branch_idx=i)
-            if branch_points and i < len(branch_points):
-                task.target_x = branch_points[i][0]
-                task.target_y = branch_points[i][1]
-            self._queue.append(task)
 
         self.get_logger().info(f'New junction #{jid} with {n_branches} branches.')
         return jid
@@ -275,39 +280,9 @@ class BlueLineFollowerNode(Node):
         prefer_queue: bool,
         branch_points: list[tuple[float, float]] | None = None,
     ) -> int | None:
-        st = self._junctions[jid]
-
-        if prefer_queue:
-            for i, task in enumerate(self._queue):
-                if task.jid == jid:
-                    self._queue.rotate(-i)
-                    picked = self._queue.popleft()
-                    chosen = picked.branch_idx
-
-                    # Remap queued branch by map anchor when returning from opposite direction,
-                    # where image left/right branch ordering can flip.
-                    if (
-                        branch_points
-                        and picked.target_x is not None
-                        and picked.target_y is not None
-                    ):
-                        remapped = self._nearest_branch_index(
-                            branch_points,
-                            picked.target_x,
-                            picked.target_y,
-                        )
-                        if remapped is not None:
-                            chosen = remapped
-
-                    try:
-                        st.pending.remove(chosen)
-                    except ValueError:
-                        pass
-                    return chosen
-
-        if st.pending:
-            return st.pending.popleft()
-
+        del jid, prefer_queue, branch_points
+        if len(self.branch_offsets) > 0:
+            return 0
         return None
 
     def _apply_branch_bias(self, branch_idx: int) -> None:
@@ -320,6 +295,19 @@ class BlueLineFollowerNode(Node):
             self._branch_bias = 0.0
         now = self.get_clock().now().nanoseconds / 1e9
         self._branch_bias_until = now + self.branch_commit_sec
+
+    def _start_junction_pause(self, branch_idx: int) -> None:
+        del branch_idx
+        now = self.get_clock().now().nanoseconds / 1e9
+        self._branch_bias = 0.0
+        self._branch_bias_until = 0.0
+        self._junction_pause_until = now + self.junction_pause_sec
+        self._junction_turn_until = self._junction_pause_until + self.branch_commit_sec
+        self._state = 'JUNCTION_PAUSE'
+
+    def _start_junction_turn(self, branch_idx: int) -> None:
+        self._apply_branch_bias(branch_idx)
+        self._start_junction_pause(branch_idx)
 
     def _junction_cb(self, msg: PoseArray) -> None:
         if not self.active or self._state == 'IDLE' or self._state == 'COMPLETE':
@@ -347,21 +335,11 @@ class BlueLineFollowerNode(Node):
             branch_points=branch_points,
         )
         self._seen_any_junction = True
-        prefer_queue = self._state == 'BACKTRACK'
-        chosen = self._select_branch_at_junction(
-            jid,
-            prefer_queue=prefer_queue,
-            branch_points=branch_points,
-        )
+        chosen = 0 if len(msg.poses) >= 2 else None
 
         if chosen is not None:
-            self._apply_branch_bias(chosen)
-            self._state = 'FOLLOW'
-            self.get_logger().info(f'Junction #{jid}: taking branch {chosen}. queue={len(self._queue)}')
-        elif self._state == 'BACKTRACK' and not self._queue:
-            # No pending branches anywhere.
-            self._state = 'COMPLETE'
-            self.get_logger().info('Blue-line BFS complete: no pending branches remain.')
+            self._start_junction_turn(chosen)
+            self.get_logger().info(f'Reached junction #{jid}: taking left branch {chosen}.')
 
         self._last_junction_trigger_pos = (self._pose_x, self._pose_y)
 
@@ -412,15 +390,27 @@ class BlueLineFollowerNode(Node):
             return
         self._blocked_window_start_pose = None
         self._blocked_window_start_t = 0.0
-        if not self._queue and self._seen_any_junction:
+        if self.face_stop_enabled and self._has_recent_face_nearby():
             self._state = 'COMPLETE'
-            self.get_logger().info('Dead end with empty queue: BFS complete.')
+            self._publish_cmd(0.0, 0.0)
+            self.get_logger().info('Reached dead end with nearby face: blue-line section complete.')
             return
 
         now = self.get_clock().now().nanoseconds / 1e9
         self._state = 'ROTATING'
         self._rotate_until = now + self.rotate_duration_sec
-        self.get_logger().info('Dead end detected: rotate 180 and backtrack.')
+        self.get_logger().info('Dead end without nearby face: rotate and continue.')
+
+    def _has_recent_face_nearby(self) -> bool:
+        if not self._have_pose:
+            return False
+        now = self.get_clock().now().nanoseconds / 1e9
+        for fx, fy, seen_t in self._face_tracks.values():
+            if (now - seen_t) > self.face_max_age_sec:
+                continue
+            if self._dist(self._pose_x, self._pose_y, fx, fy) <= self.face_stop_radius_m:
+                return True
+        return False
 
     def _tick(self) -> None:
         now = self.get_clock().now().nanoseconds / 1e9
@@ -446,17 +436,12 @@ class BlueLineFollowerNode(Node):
                         len(self.branch_offsets),
                     )
                     self._seen_any_junction = True
-                    prefer_queue = self._state == 'BACKTRACK'
-                    chosen = self._select_branch_at_junction(jid, prefer_queue=prefer_queue)
+                    chosen = 0
                     if chosen is not None:
-                        self._apply_branch_bias(chosen)
-                        self._state = 'FOLLOW'
+                        self._start_junction_turn(chosen)
                         self.get_logger().info(
-                            f'Junction #{jid} (fallback): taking branch {chosen}. queue={len(self._queue)}'
+                            f'Reached junction #{jid} (fallback): taking left branch {chosen}.'
                         )
-                    elif self._state == 'BACKTRACK' and not self._queue:
-                        self._state = 'COMPLETE'
-                        self.get_logger().info('Blue-line BFS complete: no pending branches remain.')
 
                     self._last_junction_trigger_pos = (self._pose_x, self._pose_y)
 
@@ -471,13 +456,24 @@ class BlueLineFollowerNode(Node):
             if now < self._rotate_until:
                 self._publish_cmd(0.0, self.rotate_speed)
                 return
-            self._state = 'BACKTRACK'
+            self._state = 'FOLLOW'
 
-        # FOLLOW or BACKTRACK control.
-        if not self.line_visible and (now - self._last_line_time) > self.lost_line_timeout_sec:
-            # Slow-search rotation while trying to reacquire line.
-            self._publish_cmd(0.0, 0.25)
-            return
+        if self._state == 'JUNCTION_PAUSE':
+            if now < self._junction_pause_until:
+                self._publish_cmd(0.0, 0.0)
+                return
+            self._state = 'JUNCTION_TURN'
+
+        if self._state == 'JUNCTION_TURN':
+            if now < self._junction_turn_until:
+                desired = self._branch_bias if self._branch_bias_until > now else 0.0
+                err = self.center_error - desired
+                ang = -1.8 * self.k_p * err
+                ang = max(-self.max_angular_speed, min(self.max_angular_speed, ang))
+                lin = min(self.linear_speed * 0.5, 0.08)
+                self._publish_cmd(lin, ang)
+                return
+            self._state = 'FOLLOW'
 
         desired = 0.0
         if now < self._branch_bias_until:
@@ -492,13 +488,27 @@ class BlueLineFollowerNode(Node):
 
         blocked_dead_end = self._check_blocked_dead_end(now, lin, ang)
         dead_end_event = self.dead_end or blocked_dead_end
-        if dead_end_event and not self._prev_dead_end:
-            if blocked_dead_end and not self.dead_end:
-                self.get_logger().info('Blocked forward progress detected: treating as dead end.')
-            self._start_dead_end_recovery()
-            self._prev_dead_end = dead_end_event
-            return
+        if dead_end_event:
+            if self.face_stop_enabled and self._has_recent_face_nearby():
+                self._state = 'COMPLETE'
+                self._publish_cmd(0.0, 0.0)
+                self.get_logger().info('Reached dead end with nearby face: blue-line section complete.')
+                self._prev_dead_end = True
+                return
+
+            if not self._prev_dead_end:
+                if blocked_dead_end and not self.dead_end:
+                    self.get_logger().info('Blocked forward progress detected: treating as dead end.')
+                self._start_dead_end_recovery()
+                self._prev_dead_end = True
+                return
         self._prev_dead_end = dead_end_event
+
+        # FOLLOW or BACKTRACK control.
+        if not self.line_visible and (now - self._last_line_time) > self.lost_line_timeout_sec:
+            # Slow-search rotation while trying to reacquire line.
+            self._publish_cmd(0.0, -0.25)
+            return
 
         self._publish_cmd(lin, ang)
 
