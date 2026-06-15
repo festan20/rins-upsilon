@@ -31,6 +31,7 @@ setup(
             'ring_detector2 = upsilon.ring_detector2:main',
             'ring_detector_task2 = upsilon.ring_detector_task2:main',
             'cylinder_detector_task2 = upsilon.cylinder_detector_task2:main',
+            'qr_reader_task2 = upsilon.qr_reader_task2:main',
             'blue_line_detector = upsilon.blue_line_detector:main',
             'blue_line_follower = upsilon.blue_line_follower:main',
             'controller = upsilon.controller:main',

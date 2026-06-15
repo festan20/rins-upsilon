@@ -262,6 +262,17 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}, *CAM_PARAMS],
     )
 
+    qr_reader = Node(
+        package='upsilon',
+        executable='qr_reader_task2',
+        name='qr_reader_task2',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'rgb_topic': '/oakd/rgb/preview/image_raw'},
+        ],
+    )
+
     ring_detector = Node(
         package='upsilon',
         executable='ring_detector_task2',
@@ -290,6 +301,7 @@ def generate_launch_description():
             {'top_rgb_topic': '/top_camera/rgb/preview/image_raw'},
             {'top_compressed_rgb': False},
             {'face_debug_topic': '/face_detector_task2/debug'},
+            {'qr_debug_topic': '/qr_reader_task2/debug'},
             {'ring_debug_topic': '/ring_detector_task2/debug'},
             {'cylinder_debug_topic': '/cylinder_detector_task2/debug'},
         ],
@@ -310,6 +322,7 @@ def generate_launch_description():
     ld.add_action(arm_mover)
     ld.add_action(tile_detection)
     ld.add_action(face_detector)
+    ld.add_action(qr_reader)
     ld.add_action(ring_detector)
     ld.add_action(cylinder_detector)
     ld.add_action(visualizer)

@@ -1,16 +1,6 @@
 package.xml
 setup.cfg
 setup.py
-<<<<<<< Updated upstream
-../build/upsilon/upsilon.egg-info/PKG-INFO
-../build/upsilon/upsilon.egg-info/SOURCES.txt
-../build/upsilon/upsilon.egg-info/dependency_links.txt
-../build/upsilon/upsilon.egg-info/entry_points.txt
-../build/upsilon/upsilon.egg-info/requires.txt
-../build/upsilon/upsilon.egg-info/top_level.txt
-../build/upsilon/upsilon.egg-info/zip-safe
-=======
->>>>>>> Stashed changes
 config/keepout_mask.pgm
 config/keepout_mask.yaml
 config/localization.yaml
@@ -42,10 +32,12 @@ upsilon/cylinder_detector_task2.py
 upsilon/face_detector.py
 upsilon/face_detector_task2.py
 upsilon/perception_utils.py
+upsilon/qr_reader_task2.py
 upsilon/ring_detector.py
 upsilon/ring_detector2.py
 upsilon/ring_detector_task2.py
 upsilon/speech.py
+upsilon/tile_detection.py
 upsilon/visualizer.py
 upsilon/wasd_teleop.py
 upsilon.egg-info/PKG-INFO
