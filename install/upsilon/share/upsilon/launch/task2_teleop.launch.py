@@ -21,6 +21,10 @@ Usage
 -----
   ros2 launch upsilon task2_teleop.launch.py
   ros2 launch upsilon task2_teleop.launch.py world:=task2_blue_demo
+
+MOVING top camera:
+ros2 topic pub --once /arm_command std_msgs/msg/String "data: 'manual:[0.0, 0.6, 0.5, 2.0]'"
+
 """
 
 from ament_index_python.packages import get_package_share_directory
@@ -220,6 +224,48 @@ def generate_launch_description():
         ],
     )
 
+    # ---------------- arm control ----------------
+    arm_control = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([pkg_dis_tutorial7, 'launch', 'control.launch.py'])
+        ),
+        launch_arguments=[
+            ('namespace', LaunchConfiguration('namespace')),
+        ],
+    )
+
+    arm_mover = Node(
+        package='dis_tutorial7',
+        executable='arm_mover_actions.py',
+        name='arm_mover_actions',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    tile_detection = Node(
+        package='upsilon',
+        executable='tile_detection',
+        name='tile_detection',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'rgb_topic': '/top_camera/rgb/preview/image_raw'},
+        ],
+    )
+
+    anomaly_detector = Node(
+        package='upsilon',
+        executable='anomaly_detector',
+        name='anomaly_detector',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'checkpoint': '/home/upsilon/colcon_ws/rins-upsilon/upsilon/checkpoints/anomaly_best.pth'},
+            {'encoder': 'efficientnet-b0'},
+            {'threshold': 0.5},
+        ],
+    )
+
     # ---------------- Task 2 detectors ----------------
     face_detector = Node(
         package='upsilon',
@@ -254,9 +300,12 @@ def generate_launch_description():
             {'use_sim_time': use_sim_time},
             {'rgb_topic': '/oakd/rgb/preview/image_raw'},
             {'compressed_rgb': False},
+            {'top_rgb_topic': '/top_camera/rgb/preview/image_raw'},
+            {'top_compressed_rgb': False},
             {'face_debug_topic': '/face_detector_task2/debug'},
             {'ring_debug_topic': '/ring_detector_task2/debug'},
             {'cylinder_debug_topic': '/cylinder_detector_task2/debug'},
+            {'anomaly_debug_topic': '/anomaly_detection/debug'},
         ],
         condition=IfCondition(LaunchConfiguration('visualizer')),
     )
@@ -271,6 +320,10 @@ def generate_launch_description():
     ld.add_action(keepout_filter_info_server)
     ld.add_action(keepout_lifecycle_manager)
     ld.add_action(nav2)
+    ld.add_action(arm_control)
+    ld.add_action(arm_mover)
+    ld.add_action(tile_detection)
+    ld.add_action(anomaly_detector)
     ld.add_action(face_detector)
     ld.add_action(ring_detector)
     ld.add_action(cylinder_detector)

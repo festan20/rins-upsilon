@@ -1,0 +1,46 @@
+running egg_info
+writing ../build/upsilon/upsilon.egg-info/PKG-INFO
+writing dependency_links to ../build/upsilon/upsilon.egg-info/dependency_links.txt
+writing entry points to ../build/upsilon/upsilon.egg-info/entry_points.txt
+writing requirements to ../build/upsilon/upsilon.egg-info/requires.txt
+writing top-level names to ../build/upsilon/upsilon.egg-info/top_level.txt
+reading manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+writing manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+running build
+running build_py
+copying upsilon/anomaly_model.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+copying upsilon/visualizer.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+copying upsilon/tile_detection.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+copying upsilon/anomaly_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+running install
+running install_lib
+copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/anomaly_model.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/visualizer.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/tile_detection.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/anomaly_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/anomaly_model.py to anomaly_model.cpython-312.pyc
+byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/visualizer.py to visualizer.cpython-312.pyc
+byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/tile_detection.py to tile_detection.cpython-312.pyc
+byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/anomaly_detector.py to anomaly_detector.cpython-312.pyc
+running install_data
+copying launch/task2_teleop.launch.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/launch
+running install_egg_info
+removing '/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info' (and everything under it)
+Copying ../build/upsilon/upsilon.egg-info to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info
+running install_scripts
+Installing anomaly_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing blue_line_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing blue_line_follower script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing camera_viewer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing controller script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing cylinder_detector_task2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing face_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing face_detector_task2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing ring_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing ring_detector2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing ring_detector_task2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing speech script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing tile_detection script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing visualizer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+Installing wasd_teleop script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+writing list of installed files to '/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log'

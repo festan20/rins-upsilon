@@ -40,6 +40,7 @@ class VisualizerNode(Node):
                 ('cylinder_debug_topic', ''),
                 ('tile_result_topic', '/tile_detection/result'),
                 ('tile_debug_topic', '/tile_detection/debug'),
+                ('anomaly_debug_topic', '/anomaly_detection/debug'),
             ],
         )
         self.rgb_topic = self.get_parameter('rgb_topic').get_parameter_value().string_value
@@ -51,6 +52,7 @@ class VisualizerNode(Node):
         self.cylinder_debug_topic = self.get_parameter('cylinder_debug_topic').get_parameter_value().string_value
         self.tile_result_topic = self.get_parameter('tile_result_topic').get_parameter_value().string_value
         self.tile_debug_topic = self.get_parameter('tile_debug_topic').get_parameter_value().string_value
+        self.anomaly_debug_topic = self.get_parameter('anomaly_debug_topic').get_parameter_value().string_value
         self.bridge = CvBridge()
 
         # Only subscribe to compressed RGB (small) and local debug topics
@@ -85,6 +87,11 @@ class VisualizerNode(Node):
                 Image, self.tile_debug_topic,
                 self._tile_debug_cb, QOS_LATEST)
             window_names.append('Tile Debug')
+        if self.anomaly_debug_topic:
+            self.create_subscription(
+                Image, self.anomaly_debug_topic,
+                self._anomaly_debug_cb, QOS_LATEST)
+            window_names.append('Anomaly Detection')
 
         # Create windows
         for name in window_names:
@@ -148,6 +155,13 @@ class VisualizerNode(Node):
         except CvBridgeError:
             return
         cv2.imshow('Tile Debug', frame)
+
+    def _anomaly_debug_cb(self, msg: Image) -> None:
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError:
+            return
+        cv2.imshow('Anomaly Detection', frame)
 
     def _gui_tick(self) -> None:
         cv2.waitKey(1)

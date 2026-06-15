@@ -39,6 +39,7 @@ setup(
             'camera_viewer = upsilon.camera_viewer:main',
             'wasd_teleop = upsilon.wasd_teleop:main',
             'tile_detection = upsilon.tile_detection:main',
+            'anomaly_detector = upsilon.anomaly_detector:main',
         ],
     },
 )

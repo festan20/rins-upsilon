@@ -253,6 +253,19 @@ def generate_launch_description():
         ],
     )
 
+    anomaly_detector = Node(
+        package='upsilon',
+        executable='anomaly_detector',
+        name='anomaly_detector',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'checkpoint': '/home/upsilon/colcon_ws/rins-upsilon/upsilon/checkpoints/anomaly_best.pth'},
+            {'encoder': 'efficientnet-b0'},
+            {'threshold': 0.5},
+        ],
+    )
+
     # ---------------- Task 2 detectors ----------------
     face_detector = Node(
         package='upsilon',
@@ -292,6 +305,7 @@ def generate_launch_description():
             {'face_debug_topic': '/face_detector_task2/debug'},
             {'ring_debug_topic': '/ring_detector_task2/debug'},
             {'cylinder_debug_topic': '/cylinder_detector_task2/debug'},
+            {'anomaly_debug_topic': '/anomaly_detection/debug'},
         ],
         condition=IfCondition(LaunchConfiguration('visualizer')),
     )
@@ -309,6 +323,7 @@ def generate_launch_description():
     ld.add_action(arm_control)
     ld.add_action(arm_mover)
     ld.add_action(tile_detection)
+    ld.add_action(anomaly_detector)
     ld.add_action(face_detector)
     ld.add_action(ring_detector)
     ld.add_action(cylinder_detector)
