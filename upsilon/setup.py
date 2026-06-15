@@ -38,6 +38,7 @@ setup(
             'visualizer = upsilon.visualizer:main',
             'camera_viewer = upsilon.camera_viewer:main',
             'wasd_teleop = upsilon.wasd_teleop:main',
+            'tile_detection = upsilon.tile_detection:main',
         ],
     },
 )

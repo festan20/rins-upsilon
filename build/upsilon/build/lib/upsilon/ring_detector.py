@@ -39,7 +39,7 @@ from std_msgs.msg import ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 
 from upsilon.perception_utils import (
-    decode_compressed_depth, DepthCameraGeometry, TF2Helper, IncrementalTrackManager
+    decode_depth_message, DepthCameraGeometry, TF2Helper, IncrementalTrackManager
 )
 
 # ---------------------------------------------------------------------------
@@ -144,6 +144,20 @@ class RingDetectorNode(Node):
     def __init__(self):
         super().__init__('ring_detector')
 
+        self.declare_parameters(
+            namespace='',
+            parameters=[
+                ('rgb_topic', '/oakd/rgb/preview/image_raw'),
+                ('depth_topic', '/oakd/rgb/preview/depth'),
+                ('camera_info_topic', '/oakd/rgb/preview/camera_info'),
+                ('compressed_topics', False),
+            ],
+        )
+        self.rgb_topic = self.get_parameter('rgb_topic').get_parameter_value().string_value
+        self.depth_topic = self.get_parameter('depth_topic').get_parameter_value().string_value
+        self.camera_info_topic = self.get_parameter('camera_info_topic').get_parameter_value().string_value
+        self.compressed_topics = self.get_parameter('compressed_topics').get_parameter_value().bool_value
+
         self.bridge = CvBridge()
         self.depth_cam = DepthCameraGeometry(patch_radius=4)
         self.tf2 = TF2Helper(self)
@@ -161,10 +175,12 @@ class RingDetectorNode(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        # Compressed topics to minimise WiFi bandwidth
-        self.create_subscription(CompressedImage, '/gemini/color/image_raw/compressed', self._rgb_cb, qos)
-        self.create_subscription(CompressedImage, '/gemini/depth/image_raw/compressedDepth', self._depth_cb, qos)
-        self.create_subscription(CameraInfo, '/gemini/depth/camera_info', self._caminfo_cb, qos)
+        rgb_msg_type = CompressedImage if self.compressed_topics else Image
+        depth_msg_type = CompressedImage if self.compressed_topics else Image
+
+        self.create_subscription(rgb_msg_type, self.rgb_topic, self._rgb_cb, qos)
+        self.create_subscription(depth_msg_type, self.depth_topic, self._depth_cb, qos)
+        self.create_subscription(CameraInfo, self.camera_info_topic, self._caminfo_cb, qos)
 
         self._ring_pub = self.create_publisher(PointStamped, '/detected_rings', 10)
         self._marker_pub = self.create_publisher(MarkerArray, '/ring_markers', 10)
@@ -175,9 +191,12 @@ class RingDetectorNode(Node):
         self.get_logger().info('Ring detector ready.')
 
     # ------------------------------------------------------------------
-    def _rgb_cb(self, msg: CompressedImage) -> None:
+    def _rgb_cb(self, msg: Image | CompressedImage) -> None:
         try:
-            self._latest_bgr = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+            if isinstance(msg, CompressedImage):
+                self._latest_bgr = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+            else:
+                self._latest_bgr = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         except CvBridgeError as e:
             self.get_logger().error(f'CvBridgeError: {e}')
 
@@ -185,7 +204,7 @@ class RingDetectorNode(Node):
         self.depth_cam.update_intrinsics(msg)
         self._depth_frame_id = msg.header.frame_id
 
-    def _depth_cb(self, msg: CompressedImage) -> None:
+    def _depth_cb(self, msg: Image | CompressedImage) -> None:
         if self._latest_bgr is None:
             return
 
@@ -234,13 +253,13 @@ class RingDetectorNode(Node):
         return combined
 
     # ------------------------------------------------------------------
-    def _depth_cb_inner(self, msg: CompressedImage) -> None:
+    def _depth_cb_inner(self, msg: Image | CompressedImage) -> None:
         bgr_raw = self._latest_bgr
 
         # Decode depth — used for 3D point extraction AND the proximity gate below
-        depth_m = decode_compressed_depth(msg)
+        depth_m = decode_depth_message(msg, self.bridge)
         if depth_m is None:
-            self.get_logger().error('Failed to decode compressedDepth')
+            self.get_logger().error('Failed to decode depth image')
             return
         self.depth_cam.update_depth(depth_m)
 
@@ -545,7 +564,7 @@ class RingDetectorNode(Node):
             t.pose.position.z = 0.7
             t.pose.orientation.w = 1.0
             t.scale.z = 0.15
-            t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            t.color = ColorRGBA(r=0.0, g=0.0, b=0.0, a=1.0)
             t.text = f'{colour} (n={count})'
             arr.markers.append(t)
 

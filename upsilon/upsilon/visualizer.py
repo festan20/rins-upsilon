@@ -38,6 +38,8 @@ class VisualizerNode(Node):
                 ('face_debug_topic', '/face_detector/debug'),
                 ('ring_debug_topic', '/ring_detector/debug'),
                 ('cylinder_debug_topic', ''),
+                ('tile_result_topic', '/tile_detection/result'),
+                ('tile_debug_topic', '/tile_detection/debug'),
             ],
         )
         self.rgb_topic = self.get_parameter('rgb_topic').get_parameter_value().string_value
@@ -47,6 +49,8 @@ class VisualizerNode(Node):
         self.face_debug_topic = self.get_parameter('face_debug_topic').get_parameter_value().string_value
         self.ring_debug_topic = self.get_parameter('ring_debug_topic').get_parameter_value().string_value
         self.cylinder_debug_topic = self.get_parameter('cylinder_debug_topic').get_parameter_value().string_value
+        self.tile_result_topic = self.get_parameter('tile_result_topic').get_parameter_value().string_value
+        self.tile_debug_topic = self.get_parameter('tile_debug_topic').get_parameter_value().string_value
         self.bridge = CvBridge()
 
         # Only subscribe to compressed RGB (small) and local debug topics
@@ -71,6 +75,16 @@ class VisualizerNode(Node):
                 Image, self.cylinder_debug_topic,
                 self._cylinder_debug_cb, QOS_LATEST)
             window_names.append('Cylinder Detection')
+        if self.tile_result_topic:
+            self.create_subscription(
+                Image, self.tile_result_topic,
+                self._tile_result_cb, QOS_LATEST)
+            window_names.append('Tile Result')
+        if self.tile_debug_topic:
+            self.create_subscription(
+                Image, self.tile_debug_topic,
+                self._tile_debug_cb, QOS_LATEST)
+            window_names.append('Tile Debug')
 
         # Create windows
         for name in window_names:
@@ -120,6 +134,20 @@ class VisualizerNode(Node):
         except CvBridgeError:
             return
         cv2.imshow('Cylinder Detection', frame)
+
+    def _tile_result_cb(self, msg: Image) -> None:
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError:
+            return
+        cv2.imshow('Tile Result', frame)
+
+    def _tile_debug_cb(self, msg: Image) -> None:
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError:
+            return
+        cv2.imshow('Tile Debug', frame)
 
     def _gui_tick(self) -> None:
         cv2.waitKey(1)

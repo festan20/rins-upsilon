@@ -1,0 +1,73 @@
+[0.615s] Invoking command in '/home/upsilon/colcon_ws/rins-upsilon/upsilon': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/upsilon build --build-base /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build install --record /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log --single-version-externally-managed install_data
+[0.791s] running egg_info
+[0.804s] writing ../build/upsilon/upsilon.egg-info/PKG-INFO
+[0.804s] writing dependency_links to ../build/upsilon/upsilon.egg-info/dependency_links.txt
+[0.804s] writing entry points to ../build/upsilon/upsilon.egg-info/entry_points.txt
+[0.805s] writing requirements to ../build/upsilon/upsilon.egg-info/requires.txt
+[0.805s] writing top-level names to ../build/upsilon/upsilon.egg-info/top_level.txt
+[0.832s] reading manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+[0.832s] writing manifest file '../build/upsilon/upsilon.egg-info/SOURCES.txt'
+[0.832s] running build
+[0.832s] running build_py
+[0.832s] copying upsilon/controller.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/blue_line_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/ring_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/visualizer.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/face_detector_task2.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/ring_detector_task2.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/perception_utils.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/ring_detector2.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/face_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/blue_line_follower.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] copying upsilon/cylinder_detector_task2.py -> /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon
+[0.833s] running install
+[0.838s] running install_lib
+[0.851s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/controller.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/blue_line_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/ring_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/visualizer.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/face_detector_task2.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/ring_detector_task2.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/perception_utils.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/ring_detector2.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/face_detector.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/blue_line_follower.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] copying /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build/lib/upsilon/cylinder_detector_task2.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon
+[0.852s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/controller.py to controller.cpython-312.pyc
+[0.856s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/blue_line_detector.py to blue_line_detector.cpython-312.pyc
+[0.857s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/ring_detector.py to ring_detector.cpython-312.pyc
+[0.861s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/visualizer.py to visualizer.cpython-312.pyc
+[0.861s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/face_detector_task2.py to face_detector_task2.cpython-312.pyc
+[0.863s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/ring_detector_task2.py to ring_detector_task2.cpython-312.pyc
+[0.865s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/perception_utils.py to perception_utils.cpython-312.pyc
+[0.867s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/ring_detector2.py to ring_detector2.cpython-312.pyc
+[0.869s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/face_detector.py to face_detector.cpython-312.pyc
+[0.871s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/blue_line_follower.py to blue_line_follower.cpython-312.pyc
+[0.873s] byte-compiling /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon/cylinder_detector_task2.py to cylinder_detector_task2.cpython-312.pyc
+[0.875s] running install_data
+[0.875s] copying package.xml -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon
+[0.875s] copying launch/task2.launch.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/launch
+[0.875s] copying launch/task2_teleop.launch.py -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/launch
+[0.875s] copying config/keepout_mask.pgm -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/config
+[0.876s] copying config/keepout_mask.yaml -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/config
+[0.876s] copying config/upsilon.rviz -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/config
+[0.876s] copying config/nav2.yaml -> /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/share/upsilon/config
+[0.876s] running install_egg_info
+[0.890s] removing '/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info' (and everything under it)
+[0.890s] Copying ../build/upsilon/upsilon.egg-info to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages/upsilon-0.1.0-py3.12.egg-info
+[0.891s] running install_scripts
+[0.979s] Installing blue_line_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.979s] Installing blue_line_follower script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.979s] Installing camera_viewer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.979s] Installing controller script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.979s] Installing cylinder_detector_task2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.979s] Installing face_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.979s] Installing face_detector_task2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] Installing ring_detector script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] Installing ring_detector2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] Installing ring_detector_task2 script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] Installing speech script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] Installing visualizer script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] Installing wasd_teleop script to /home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/upsilon
+[0.980s] writing list of installed files to '/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log'
+[0.996s] Invoked command in '/home/upsilon/colcon_ws/rins-upsilon/upsilon' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/upsilon/colcon_ws/rins-upsilon/build/upsilon/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/upsilon/colcon_ws/rins-upsilon/install/upsilon/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/upsilon build --build-base /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/build install --record /home/upsilon/colcon_ws/rins-upsilon/build/upsilon/install.log --single-version-externally-managed install_data

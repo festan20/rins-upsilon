@@ -25,8 +25,8 @@ from cv_bridge import CvBridge, CvBridgeError
 from ultralytics import YOLO
 
 from upsilon.perception_utils import (
-    decode_compressed_depth, DepthCameraGeometry, TF2Helper, IncrementalTrackManager,
-    MapBoundsTracker,
+    decode_depth_message, DepthCameraGeometry, TF2Helper, IncrementalTrackManager,
+    OccupancyGridMap,
 )
 
 
@@ -35,14 +35,29 @@ class FaceDetectorNode(Node):
     def __init__(self):
         super().__init__('face_detector')
 
-        self.declare_parameters(namespace='', parameters=[('device', '')])
+        self.declare_parameters(
+            namespace='',
+            parameters=[
+                ('device', ''),
+                ('rgb_topic', '/oakd/rgb/preview/image_raw'),
+                ('depth_topic', '/oakd/rgb/preview/depth'),
+                ('camera_info_topic', '/oakd/rgb/preview/camera_info'),
+                ('compressed_topics', False),
+            ],
+        )
         self.device = self.get_parameter('device').get_parameter_value().string_value
+        self.rgb_topic = self.get_parameter('rgb_topic').get_parameter_value().string_value
+        self.depth_topic = self.get_parameter('depth_topic').get_parameter_value().string_value
+        self.camera_info_topic = self.get_parameter('camera_info_topic').get_parameter_value().string_value
+        self.compressed_topics = self.get_parameter('compressed_topics').get_parameter_value().bool_value
 
         self.bridge = CvBridge()
         self.tf2 = TF2Helper(self)
         self.depth_cam = DepthCameraGeometry(patch_radius=10)
         self.tracker = IncrementalTrackManager(merge_distance=0.8)
-        self.map_bounds = MapBoundsTracker(self)
+        self.grid_map = OccupancyGridMap(self)
+        # Max distance to search for a wall along the face bearing.
+        self.max_wall_range = 8.0
 
         self.detection_color = (0, 0, 255)
         self._latest_bgr = None
@@ -59,10 +74,12 @@ class FaceDetectorNode(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        # Subscribers — compressed topics to minimise WiFi bandwidth
-        self.create_subscription(CompressedImage, '/gemini/color/image_raw/compressed', self._rgb_cb, qos)
-        self.create_subscription(CompressedImage, '/gemini/depth/image_raw/compressedDepth', self._depth_cb, qos)
-        self.create_subscription(CameraInfo, '/gemini/depth/camera_info', self._caminfo_cb, qos)
+        rgb_msg_type = CompressedImage if self.compressed_topics else Image
+        depth_msg_type = CompressedImage if self.compressed_topics else Image
+
+        self.create_subscription(rgb_msg_type, self.rgb_topic, self._rgb_cb, qos)
+        self.create_subscription(depth_msg_type, self.depth_topic, self._depth_cb, qos)
+        self.create_subscription(CameraInfo, self.camera_info_topic, self._caminfo_cb, qos)
 
         # Publishers
         self._face_pub = self.create_publisher(PointStamped, '/detected_faces', 10)
@@ -74,9 +91,12 @@ class FaceDetectorNode(Node):
         self.get_logger().info('Face detector ready.')
 
     # ------------------------------------------------------------------
-    def _rgb_cb(self, msg: CompressedImage) -> None:
+    def _rgb_cb(self, msg: Image | CompressedImage) -> None:
         try:
-            cv_image = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+            if isinstance(msg, CompressedImage):
+                cv_image = self.bridge.compressed_imgmsg_to_cv2(msg, 'bgr8')
+            else:
+                cv_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         except CvBridgeError as e:
             self.get_logger().error(f'CvBridgeError: {e}')
             return
@@ -137,7 +157,7 @@ class FaceDetectorNode(Node):
         self.depth_cam.update_intrinsics(msg)
         self._depth_frame_id = msg.header.frame_id
 
-    def _depth_cb(self, msg: CompressedImage) -> None:
+    def _depth_cb(self, msg: Image | CompressedImage) -> None:
         if not self._faces:
             return
 
@@ -151,39 +171,79 @@ class FaceDetectorNode(Node):
         except Exception as e:
             self.get_logger().error(f'Face detection error (recovering): {e}')
 
-    def _depth_cb_inner(self, msg: CompressedImage) -> None:
-        depth_m = decode_compressed_depth(msg)
+    def _face_map_position(self, cx: int, cy: int, stamp):
+        """Estimate a face's map-frame (x, y, z).
+
+        Faces are on walls, so the position is the first occupied cell along the
+        camera bearing through the face pixel (raycast on the static /map). This
+        only relies on the bearing, not on (noisy) depth range, which previously
+        dropped the marker onto/behind the robot.
+
+        Falls back to depth back-projection if the map isn't ready yet or the
+        ray doesn't hit a wall.
+        """
+        ray = self.depth_cam.pixel_to_ray(cx, cy)
+        if ray is not None and self.grid_map.ready:
+            # Camera origin and a point 1 m along the ray, both in the optical
+            # frame, transformed to map → gives origin + bearing on the floor plane.
+            origin = PointStamped()
+            origin.header.frame_id = self._depth_frame_id
+            origin.header.stamp = stamp
+            origin.point.x = 0.0
+            origin.point.y = 0.0
+            origin.point.z = 0.0
+
+            ahead = PointStamped()
+            ahead.header.frame_id = self._depth_frame_id
+            ahead.header.stamp = stamp
+            ahead.point.x = ray[0]
+            ahead.point.y = ray[1]
+            ahead.point.z = ray[2]
+
+            o_map = self.tf2.transform_point(origin, 'map')
+            a_map = self.tf2.transform_point(ahead, 'map')
+            if o_map is not None and a_map is not None:
+                ox, oy = o_map.point.x, o_map.point.y
+                dx = a_map.point.x - ox
+                dy = a_map.point.y - oy
+                hit = self.grid_map.raycast(ox, oy, dx, dy,
+                                            max_range=self.max_wall_range)
+                if hit is not None:
+                    return (hit[0], hit[1], 0.5)
+
+        # Fallback: depth back-projection (old behaviour).
+        pt_3d = self.depth_cam.get_point(cx, cy)
+        if pt_3d is None:
+            return None
+        pt = PointStamped()
+        pt.header.frame_id = self._depth_frame_id
+        pt.header.stamp = stamp
+        pt.point.x = pt_3d[0]
+        pt.point.y = pt_3d[1]
+        pt.point.z = pt_3d[2]
+        map_pt = self.tf2.transform_point(pt, 'map')
+        if map_pt is None:
+            return None
+        return (map_pt.point.x, map_pt.point.y, map_pt.point.z)
+
+    def _depth_cb_inner(self, msg: Image | CompressedImage) -> None:
+        depth_m = decode_depth_message(msg, self.bridge)
         if depth_m is None:
-            self.get_logger().error('Failed to decode compressedDepth')
+            self.get_logger().error('Failed to decode depth image')
             return
 
         self.depth_cam.update_depth(depth_m)
 
         for cx, cy in self._faces:
-            pt_3d = self.depth_cam.get_point(cx, cy)
-            if pt_3d is None:
-                self.get_logger().info('Face detected but no valid depth in patch.')
+            pos = self._face_map_position(cx, cy, msg.header.stamp)
+            if pos is None:
+                self.get_logger().info(
+                    'Face detected but could not localize on a wall.',
+                    throttle_duration_sec=2.0)
                 continue
+            mx, my, mz = pos
 
-            # Build PointStamped in camera frame
-            pt = PointStamped()
-            pt.header.frame_id = self._depth_frame_id
-            pt.header.stamp = msg.header.stamp
-            pt.point.x = pt_3d[0]
-            pt.point.y = pt_3d[1]
-            pt.point.z = pt_3d[2]
-
-            # Transform to map frame
-            map_pt = self.tf2.transform_point(pt, 'map')
-            if map_pt is None:
-                self.get_logger().warn(f'TF failed: {self._depth_frame_id} -> map')
-                continue
-
-            mx = map_pt.point.x
-            my = map_pt.point.y
-            mz = map_pt.point.z
-
-            if not self.map_bounds.is_in_bounds(mx, my):
+            if not self.grid_map.is_in_bounds(mx, my):
                 self.get_logger().info(
                     f'Face off-map ({mx:.2f}, {my:.2f}) — skipped',
                     throttle_duration_sec=2.0)
@@ -249,7 +309,7 @@ class FaceDetectorNode(Node):
             t.pose.position.z = 0.7
             t.pose.orientation.w = 1.0
             t.scale.z = 0.15
-            t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            t.color = ColorRGBA(r=0.0, g=0.0, b=0.0, a=1.0)
             t.text = f'face (n={track["count"]})'
             arr.markers.append(t)
         self._marker_pub.publish(arr)
