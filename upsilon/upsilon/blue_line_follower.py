@@ -2,14 +2,10 @@
 
 This node consumes outputs from blue_line_detector and drives /cmd_vel.
 Policy summary:
-    - At each junction, always commit to the leftmost branch (robot-local image left).
-    - At dead end without nearby face: rotate and continue following.
+    - At each junction: stop briefly, rotate ~90° left in-place, then scan
+      right slowly until the blue line is reacquired.
+    - At dead end without nearby face: rotate 180° and continue following.
     - At dead end with nearby face: stop and mark blue-line section complete.
-
-Notes
------
-- Junction identity is map-frame proximity based.
-- Steering is visual-servo on center_error with a temporary branch bias.
 """
 
 from collections import deque
@@ -37,14 +33,6 @@ class JunctionState:
     branch_points: dict[int, tuple[float, float]] = field(default_factory=dict)
 
 
-@dataclass
-class BranchTask:
-    jid: int
-    branch_idx: int
-    target_x: float | None = None
-    target_y: float | None = None
-
-
 class BlueLineFollowerNode(Node):
     def __init__(self):
         super().__init__('blue_line_follower')
@@ -62,8 +50,12 @@ class BlueLineFollowerNode(Node):
                 ('blocked_dead_end_min_progress_m', 0.03),
                 ('blocked_dead_end_min_cmd_lin', 0.14),
                 ('blocked_dead_end_max_abs_ang', 0.22),
-                ('branch_commit_sec', 1.2),
-                ('junction_pause_sec', 1.0),
+                ('junction_pause_sec', 0.5),
+                ('junction_rotate_speed', 0.6),
+                ('junction_rotate_sec', 1.4),
+                ('junction_scan_speed', 0.3),
+                ('junction_scan_timeout_sec', 4.0),
+                ('junction_forward_sec', 2.0),
                 ('rotate_speed', 0.6),
                 ('rotate_duration_sec', 3.2),
                 ('junction_match_dist', 0.45),
@@ -75,33 +67,38 @@ class BlueLineFollowerNode(Node):
             ],
         )
 
-        self.linear_speed = self.get_parameter('linear_speed').get_parameter_value().double_value
-        self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
-        self.k_p = self.get_parameter('k_p').get_parameter_value().double_value
-        self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
-        self.lost_line_timeout_sec = self.get_parameter('lost_line_timeout_sec').get_parameter_value().double_value
-        self.blocked_dead_end_timeout_sec = self.get_parameter(
-            'blocked_dead_end_timeout_sec'
-        ).get_parameter_value().double_value
-        self.blocked_dead_end_min_progress_m = self.get_parameter(
-            'blocked_dead_end_min_progress_m'
-        ).get_parameter_value().double_value
-        self.blocked_dead_end_min_cmd_lin = self.get_parameter(
-            'blocked_dead_end_min_cmd_lin'
-        ).get_parameter_value().double_value
-        self.blocked_dead_end_max_abs_ang = self.get_parameter(
-            'blocked_dead_end_max_abs_ang'
-        ).get_parameter_value().double_value
-        self.branch_commit_sec = self.get_parameter('branch_commit_sec').get_parameter_value().double_value
-        self.junction_pause_sec = self.get_parameter('junction_pause_sec').get_parameter_value().double_value
-        self.rotate_speed = self.get_parameter('rotate_speed').get_parameter_value().double_value
-        self.rotate_duration_sec = self.get_parameter('rotate_duration_sec').get_parameter_value().double_value
-        self.junction_match_dist = self.get_parameter('junction_match_dist').get_parameter_value().double_value
-        self.junction_rearm_dist = self.get_parameter('junction_rearm_dist').get_parameter_value().double_value
-        self.face_stop_enabled = self.get_parameter('face_stop_enabled').get_parameter_value().bool_value
-        self.face_stop_radius_m = self.get_parameter('face_stop_radius_m').get_parameter_value().double_value
-        self.face_max_age_sec = self.get_parameter('face_max_age_sec').get_parameter_value().double_value
-        self.active = self.get_parameter('active').get_parameter_value().bool_value
+        def _get_double(name):
+            return self.get_parameter(name).get_parameter_value().double_value
+
+        def _get_bool(name):
+            return self.get_parameter(name).get_parameter_value().bool_value
+
+        def _get_str(name):
+            return self.get_parameter(name).get_parameter_value().string_value
+
+        self.linear_speed = _get_double('linear_speed')
+        self.max_angular_speed = _get_double('max_angular_speed')
+        self.k_p = _get_double('k_p')
+        self.cmd_vel_topic = _get_str('cmd_vel_topic')
+        self.lost_line_timeout_sec = _get_double('lost_line_timeout_sec')
+        self.blocked_dead_end_timeout_sec = _get_double('blocked_dead_end_timeout_sec')
+        self.blocked_dead_end_min_progress_m = _get_double('blocked_dead_end_min_progress_m')
+        self.blocked_dead_end_min_cmd_lin = _get_double('blocked_dead_end_min_cmd_lin')
+        self.blocked_dead_end_max_abs_ang = _get_double('blocked_dead_end_max_abs_ang')
+        self.junction_pause_sec = _get_double('junction_pause_sec')
+        self.junction_rotate_speed = _get_double('junction_rotate_speed')
+        self.junction_rotate_sec = _get_double('junction_rotate_sec')
+        self.junction_scan_speed = _get_double('junction_scan_speed')
+        self.junction_scan_timeout_sec = _get_double('junction_scan_timeout_sec')
+        self.junction_forward_sec = _get_double('junction_forward_sec')
+        self.rotate_speed = _get_double('rotate_speed')
+        self.rotate_duration_sec = _get_double('rotate_duration_sec')
+        self.junction_match_dist = _get_double('junction_match_dist')
+        self.junction_rearm_dist = _get_double('junction_rearm_dist')
+        self.face_stop_enabled = _get_bool('face_stop_enabled')
+        self.face_stop_radius_m = _get_double('face_stop_radius_m')
+        self.face_max_age_sec = _get_double('face_max_age_sec')
+        self.active = _get_bool('active')
 
         self.center_error = 0.0
         self.line_visible = False
@@ -114,9 +111,9 @@ class BlueLineFollowerNode(Node):
         self._state = 'FOLLOW' if self.active else 'IDLE'
         self._rotate_until = 0.0
         self._junction_pause_until = 0.0
-        self._junction_turn_until = 0.0
-        self._branch_bias = 0.0
-        self._branch_bias_until = 0.0
+        self._junction_rotate_until = 0.0
+        self._junction_scan_until = 0.0
+        self._junction_forward_until = 0.0
 
         self._pose_x = 0.0
         self._pose_y = 0.0
@@ -124,7 +121,6 @@ class BlueLineFollowerNode(Node):
 
         self._junctions: dict[int, JunctionState] = {}
         self._next_jid = 0
-        self._queue: deque[BranchTask] = deque()
         self._last_junction_trigger_pos = None
         self._seen_any_junction = False
         self._blocked_window_start_t = 0.0
@@ -157,19 +153,24 @@ class BlueLineFollowerNode(Node):
             f'Blue line follower ready. active={self.active} cmd_vel_topic={self.cmd_vel_topic}'
         )
 
+    # ------------------------------------------------------------------
+    # Activation
+    # ------------------------------------------------------------------
+
     def _set_active(self, enabled: bool) -> None:
         self.active = bool(enabled)
         self._state = 'FOLLOW' if self.active else 'IDLE'
         self._blocked_window_start_pose = None
         self._blocked_window_start_t = 0.0
         self._junction_pause_until = 0.0
-        self._junction_turn_until = 0.0
+        self._junction_rotate_until = 0.0
+        self._junction_scan_until = 0.0
+        self._junction_forward_until = 0.0
         if not self.active:
             self._publish_cmd(0.0, 0.0)
 
     def _set_active_cb(self, request: SetBool.Request, response: SetBool.Response):
         self._set_active(request.data)
-        # Keep parameter value in sync with service-driven state.
         self.set_parameters([Parameter('active', value=self.active)])
         response.success = True
         response.message = f'blue_line_follower active={self.active}'
@@ -180,10 +181,13 @@ class BlueLineFollowerNode(Node):
         for p in params:
             if p.name == 'active' and p.type_ == Parameter.Type.BOOL:
                 self._set_active(bool(p.value))
-
         result = SetParametersResult()
         result.successful = True
         return result
+
+    # ------------------------------------------------------------------
+    # Subscriptions
+    # ------------------------------------------------------------------
 
     def _center_error_cb(self, msg: Float32) -> None:
         self.center_error = float(max(-1.0, min(1.0, msg.data)))
@@ -215,6 +219,10 @@ class BlueLineFollowerNode(Node):
         now = self.get_clock().now().nanoseconds / 1e9
         self._face_tracks[track_id] = (msg.point.x, msg.point.y, now)
 
+    # ------------------------------------------------------------------
+    # Junction logic
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _dist(a_x: float, a_y: float, b_x: float, b_y: float) -> float:
         return math.hypot(a_x - b_x, a_y - b_y)
@@ -228,23 +236,6 @@ class BlueLineFollowerNode(Node):
                 best_d = d
                 best_id = jid
         return best_id
-
-    @staticmethod
-    def _nearest_branch_index(
-        candidates: list[tuple[float, float]],
-        target_x: float,
-        target_y: float,
-    ) -> int | None:
-        if not candidates:
-            return None
-        best_idx = None
-        best_d = 1e9
-        for i, (cx, cy) in enumerate(candidates):
-            d = math.hypot(cx - target_x, cy - target_y)
-            if d < best_d:
-                best_d = d
-                best_idx = i
-        return best_idx
 
     def _create_or_update_junction(
         self,
@@ -266,60 +257,33 @@ class BlueLineFollowerNode(Node):
         jid = self._next_jid
         self._next_jid += 1
         st = JunctionState(jid=jid, x=x, y=y, total_branches=n_branches)
-        for i in range(n_branches):
-            if branch_points and i < len(branch_points):
-                st.branch_points[i] = branch_points[i]
+        if branch_points:
+            for i, pt in enumerate(branch_points):
+                st.branch_points[i] = pt
         self._junctions[jid] = st
-
         self.get_logger().info(f'New junction #{jid} with {n_branches} branches.')
         return jid
 
-    def _select_branch_at_junction(
-        self,
-        jid: int,
-        prefer_queue: bool,
-        branch_points: list[tuple[float, float]] | None = None,
-    ) -> int | None:
-        del jid, prefer_queue, branch_points
-        if len(self.branch_offsets) > 0:
-            return 0
-        return None
-
-    def _apply_branch_bias(self, branch_idx: int) -> None:
-        if not self.branch_offsets:
-            # Fallback bias when detector branch offsets are not available yet.
-            self._branch_bias = -0.3 + 0.3 * branch_idx
-        elif 0 <= branch_idx < len(self.branch_offsets):
-            self._branch_bias = self.branch_offsets[branch_idx]
-        else:
-            self._branch_bias = 0.0
+    def _trigger_junction(self, jid: int) -> None:
+        """Begin junction handling: stop, rotate left, scan for line."""
         now = self.get_clock().now().nanoseconds / 1e9
-        self._branch_bias_until = now + self.branch_commit_sec
-
-    def _start_junction_pause(self, branch_idx: int) -> None:
-        del branch_idx
-        now = self.get_clock().now().nanoseconds / 1e9
-        self._branch_bias = 0.0
-        self._branch_bias_until = 0.0
         self._junction_pause_until = now + self.junction_pause_sec
-        self._junction_turn_until = self._junction_pause_until + self.branch_commit_sec
         self._state = 'JUNCTION_PAUSE'
-
-    def _start_junction_turn(self, branch_idx: int) -> None:
-        self._apply_branch_bias(branch_idx)
-        self._start_junction_pause(branch_idx)
+        self.get_logger().info(
+            f'Junction #{jid}: stopping then rotating left ~90°.'
+        )
 
     def _junction_cb(self, msg: PoseArray) -> None:
-        if not self.active or self._state == 'IDLE' or self._state == 'COMPLETE':
+        if not self.active:
+            return
+        if self._state not in ('FOLLOW',):
             return
         if not self._have_pose:
             return
         if len(msg.poses) < 2:
             return
 
-        branch_points = [(p.position.x, p.position.y) for p in msg.poses]
-
-        # De-bounce: avoid retriggering the same junction while standing near it.
+        # De-bounce: ignore if still near the last triggered junction.
         if self._last_junction_trigger_pos is not None:
             d_last = self._dist(
                 self._pose_x, self._pose_y,
@@ -328,28 +292,17 @@ class BlueLineFollowerNode(Node):
             if d_last < self.junction_rearm_dist:
                 return
 
+        branch_points = [(p.position.x, p.position.y) for p in msg.poses]
         jid = self._create_or_update_junction(
-            self._pose_x,
-            self._pose_y,
-            len(msg.poses),
-            branch_points=branch_points,
+            self._pose_x, self._pose_y, len(msg.poses), branch_points=branch_points,
         )
         self._seen_any_junction = True
-        chosen = 0 if len(msg.poses) >= 2 else None
-
-        if chosen is not None:
-            self._start_junction_turn(chosen)
-            self.get_logger().info(f'Reached junction #{jid}: taking left branch {chosen}.')
-
         self._last_junction_trigger_pos = (self._pose_x, self._pose_y)
+        self._trigger_junction(jid)
 
-    def _publish_cmd(self, lin: float, ang: float) -> None:
-        msg = TwistStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'base_link'
-        msg.twist.linear.x = float(lin)
-        msg.twist.angular.z = float(ang)
-        self.cmd_pub.publish(msg)
+    # ------------------------------------------------------------------
+    # Dead-end logic
+    # ------------------------------------------------------------------
 
     def _check_blocked_dead_end(self, now: float, cmd_lin: float, cmd_ang: float) -> bool:
         """Treat sustained no-progress while commanding forward as a dead-end."""
@@ -372,13 +325,10 @@ class BlueLineFollowerNode(Node):
             return False
 
         progress = self._dist(
-            self._pose_x,
-            self._pose_y,
-            self._blocked_window_start_pose[0],
-            self._blocked_window_start_pose[1],
+            self._pose_x, self._pose_y,
+            self._blocked_window_start_pose[0], self._blocked_window_start_pose[1],
         )
         if progress >= self.blocked_dead_end_min_progress_m:
-            # Robot is progressing, slide window forward.
             self._blocked_window_start_pose = (self._pose_x, self._pose_y)
             self._blocked_window_start_t = now
             return False
@@ -399,7 +349,7 @@ class BlueLineFollowerNode(Node):
         now = self.get_clock().now().nanoseconds / 1e9
         self._state = 'ROTATING'
         self._rotate_until = now + self.rotate_duration_sec
-        self.get_logger().info('Dead end without nearby face: rotate and continue.')
+        self.get_logger().info('Dead end without nearby face: rotating to reverse direction.')
 
     def _has_recent_face_nearby(self) -> bool:
         if not self._have_pose:
@@ -412,74 +362,100 @@ class BlueLineFollowerNode(Node):
                 return True
         return False
 
+    # ------------------------------------------------------------------
+    # Publishing
+    # ------------------------------------------------------------------
+
+    def _publish_cmd(self, lin: float, ang: float) -> None:
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        msg.twist.linear.x = float(lin)
+        msg.twist.angular.z = float(ang)
+        self.cmd_pub.publish(msg)
+
+    # ------------------------------------------------------------------
+    # Main control loop
+    # ------------------------------------------------------------------
+
     def _tick(self) -> None:
         now = self.get_clock().now().nanoseconds / 1e9
 
-        # Fallback branch detection path when PoseArray junction candidates are sparse.
-        # This uses image-space branch offsets and current pose to build/update queue.
-        if self.active and self._state in ('FOLLOW', 'BACKTRACK') and self._have_pose:
+        # Fallback junction detection from image-space branch offsets (top camera).
+        if self.active and self._state == 'FOLLOW' and self._have_pose:
             if len(self.branch_offsets) >= 2:
-                allow_trigger = True
+                allow = True
                 if self._last_junction_trigger_pos is not None:
-                    d_last = self._dist(
-                        self._pose_x,
-                        self._pose_y,
-                        self._last_junction_trigger_pos[0],
-                        self._last_junction_trigger_pos[1],
+                    d = self._dist(
+                        self._pose_x, self._pose_y,
+                        self._last_junction_trigger_pos[0], self._last_junction_trigger_pos[1],
                     )
-                    allow_trigger = d_last >= self.junction_rearm_dist
-
-                if allow_trigger:
+                    allow = d >= self.junction_rearm_dist
+                if allow:
                     jid = self._create_or_update_junction(
-                        self._pose_x,
-                        self._pose_y,
-                        len(self.branch_offsets),
+                        self._pose_x, self._pose_y, len(self.branch_offsets),
                     )
                     self._seen_any_junction = True
-                    chosen = 0
-                    if chosen is not None:
-                        self._start_junction_turn(chosen)
-                        self.get_logger().info(
-                            f'Reached junction #{jid} (fallback): taking left branch {chosen}.'
-                        )
-
                     self._last_junction_trigger_pos = (self._pose_x, self._pose_y)
+                    self._trigger_junction(jid)
+                    return
 
-        # Rising-edge dead-end handling.
         if self._state in ('IDLE', 'COMPLETE'):
             self._publish_cmd(0.0, 0.0)
             self._blocked_window_start_pose = None
             self._blocked_window_start_t = 0.0
             return
 
+        # 180° rotation for dead-end reversal.
         if self._state == 'ROTATING':
             if now < self._rotate_until:
                 self._publish_cmd(0.0, self.rotate_speed)
                 return
             self._state = 'FOLLOW'
 
+        # Junction handling: stop → rotate left → scan right for line.
         if self._state == 'JUNCTION_PAUSE':
             if now < self._junction_pause_until:
                 self._publish_cmd(0.0, 0.0)
                 return
-            self._state = 'JUNCTION_TURN'
+            self._junction_rotate_until = now + self.junction_rotate_sec
+            self._state = 'JUNCTION_ROTATE'
 
-        if self._state == 'JUNCTION_TURN':
-            if now < self._junction_turn_until:
-                desired = self._branch_bias if self._branch_bias_until > now else 0.0
-                err = self.center_error - desired
-                ang = -1.8 * self.k_p * err
+        if self._state == 'JUNCTION_ROTATE':
+            if now < self._junction_rotate_until:
+                self._publish_cmd(0.0, self.junction_rotate_speed)  # CCW = left
+                return
+            self._junction_scan_until = now + self.junction_scan_timeout_sec
+            self._state = 'JUNCTION_SCAN'
+            self.get_logger().info('Junction rotate done — scanning right for blue line.')
+
+        if self._state == 'JUNCTION_SCAN':
+            if self.line_visible:
+                self.get_logger().info('Junction scan: blue line reacquired — driving forward.')
+                self._junction_forward_until = now + self.junction_forward_sec
+                self._state = 'JUNCTION_FORWARD'
+            elif now < self._junction_scan_until:
+                self._publish_cmd(0.0, -self.junction_scan_speed)  # CW = right scan
+                return
+            else:
+                self.get_logger().warn(
+                    'Junction scan timed out without finding blue line — driving forward anyway.'
+                )
+                self._junction_forward_until = now + self.junction_forward_sec
+                self._state = 'JUNCTION_FORWARD'
+
+        # Follow the line forward briefly after a junction before re-arming detection.
+        if self._state == 'JUNCTION_FORWARD':
+            if now < self._junction_forward_until:
+                err = self.center_error
+                ang = -self.k_p * err
                 ang = max(-self.max_angular_speed, min(self.max_angular_speed, ang))
-                lin = min(self.linear_speed * 0.5, 0.08)
-                self._publish_cmd(lin, ang)
+                self._publish_cmd(self.linear_speed * max(0.2, 1.0 - abs(err)), ang)
                 return
             self._state = 'FOLLOW'
 
-        desired = 0.0
-        if now < self._branch_bias_until:
-            desired = self._branch_bias
-
-        err = self.center_error - desired
+        # FOLLOW control.
+        err = self.center_error
         ang = -self.k_p * err
         ang = max(-self.max_angular_speed, min(self.max_angular_speed, ang))
 
@@ -504,9 +480,7 @@ class BlueLineFollowerNode(Node):
                 return
         self._prev_dead_end = dead_end_event
 
-        # FOLLOW or BACKTRACK control.
         if not self.line_visible and (now - self._last_line_time) > self.lost_line_timeout_sec:
-            # Slow-search rotation while trying to reacquire line.
             self._publish_cmd(0.0, -0.25)
             return
 
