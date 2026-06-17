@@ -56,6 +56,10 @@ DEPTH_MIN = 0.3
 DEPTH_MAX = 4.0
 MIN_BLOB_POINTS = 12           # need this many valid cloud points in the blob
 BARREL_RADIUS = 0.11           # m — push the front-surface point back to the axis
+BARREL_MIN_HEIGHT_M = 0.004    # map-frame z of blob centroid; floor lines are ~0
+BARREL_MAX_HEIGHT_M = 0.30     # centroid above this = wall feature / not a barrel
+SPILL_MIN_AREA = 50            # min connected px outside barrel rect to call it a spill
+
 
 COLOUR_BUCKETS = [
     ('red',    [(np.array([0, 100, 60]),   np.array([8, 255, 255])),
@@ -122,6 +126,7 @@ class CylinderDetectorTask2Node(Node):
         self.tracker = IncrementalTrackManager(merge_distance=0.4)
         self.map_bounds = MapBoundsTracker(self)
         self._orientations: dict[int, str] = {}  # track_id -> 'upright'|'fallen'
+        self._leaking: dict[int, bool] = {}       # track_id -> True if spill ever seen
 
         self._latest_bgr: np.ndarray | None = None
         self._last_process_time = 0.0
@@ -135,6 +140,7 @@ class CylinderDetectorTask2Node(Node):
         self._marker_pub = self.create_publisher(MarkerArray, '/cylinder_markers_task2', 10)
         self._debug_pub = self.create_publisher(Image, '/cylinder_detector_task2/debug', 10)
         self._threshold_pub = self.create_publisher(Image, '/cylinder_detector_task2/threshold', 10)
+        self._spill_debug_pub = self.create_publisher(Image, '/cylinder_detector_task2/spill_debug', 10)
 
         self.get_logger().info('Cylinder detector (Task 2) ready — cloud + dedup.')
 
@@ -187,6 +193,67 @@ class CylinderDetectorTask2Node(Node):
             med = med * ((d + BARREL_RADIUS) / d)
         return med
 
+    def _find_spill(self, colour_mask: np.ndarray, barrel_cnt, colour: str):
+        """Return (is_spill, debug_bgr).
+
+        The contour may include a merged spill blob, so we can't fit a rect to it
+        directly. Instead we erode the filled contour to break the thin barrel-spill
+        connection, isolate the largest component (= barrel body), dilate back, then
+        fit a rect to that barrel-only region. Pixels outside that rect = spill.
+        """
+        img_h, img_w = colour_mask.shape[:2]
+
+        # fill the full detected contour (barrel + possibly merged spill)
+        filled = np.zeros((img_h, img_w), dtype=np.uint8)
+        cv2.drawContours(filled, [barrel_cnt], -1, 255, -1)
+
+        # erode to disconnect spill from barrel body via thin bridges
+        kernel = np.ones((7, 7), dtype=np.uint8)
+        eroded = cv2.erode(filled, kernel, iterations=2)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(eroded, connectivity=8)
+        if n > 1:
+            # largest component after erosion = barrel body
+            largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            barrel_body = cv2.dilate(
+                (labels == largest).astype(np.uint8) * 255, kernel, iterations=2)
+            pts = cv2.findNonZero(barrel_body)
+            barrel_rect = cv2.minAreaRect(pts) if pts is not None else cv2.minAreaRect(barrel_cnt)
+        else:
+            barrel_rect = cv2.minAreaRect(barrel_cnt)
+
+        # erase the barrel-only rect from the colour mask
+        rect_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+        cv2.fillPoly(rect_mask, [np.intp(cv2.boxPoints(barrel_rect))], 255)
+        without_barrel = colour_mask.copy()
+        without_barrel[rect_mask > 0] = 0
+
+        # search window: one barrel-size margin around bounding box
+        bx, by, bw, bh = cv2.boundingRect(barrel_cnt)
+        margin = max(bw, bh)
+        y1 = max(0, by - margin);  y2 = min(img_h, by + bh + margin)
+        x1 = max(0, bx - margin);  x2 = min(img_w, bx + bw + margin)
+
+        threshold_y = by + (bh * 2 // 3)
+        above_count = int(np.count_nonzero(without_barrel[y1:threshold_y, x1:x2]))
+        below_count = int(np.count_nonzero(without_barrel[threshold_y:y2, x1:x2]))
+        total = above_count + below_count
+        spill = total >= SPILL_MIN_AREA and (below_count / total) >= 0.75
+
+        # debug image
+        below_mask = without_barrel.copy(); below_mask[:threshold_y, :] = 0
+        above_mask = without_barrel.copy(); above_mask[threshold_y:, :] = 0
+        dbg = cv2.cvtColor(colour_mask, cv2.COLOR_GRAY2BGR)
+        dbg[rect_mask > 0]   = (0, 0, 180)    # red    = erased barrel rect
+        dbg[above_mask > 0]  = (0, 165, 255)  # orange = surviving above threshold (disqualifies)
+        dbg[below_mask > 0]  = (0, 255, 0)    # green  = surviving below threshold (valid spill)
+        cv2.line(dbg, (0, threshold_y), (img_w, threshold_y), (0, 255, 255), 1)  # cyan threshold line
+        cv2.rectangle(dbg, (x1, y1), (x2, y2), (255, 100, 0), 2)
+        cv2.drawContours(dbg, [barrel_cnt], -1, (255, 255, 0), 1)
+        label = f'{colour} SPILL' if spill else f'{colour} no spill'
+        cv2.putText(dbg, label, (x1, max(y1 - 6, 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        return spill, dbg
+
     def _cloud_cb_inner(self, msg: PointCloud2) -> None:
         bgr = self._latest_bgr
         height, width = msg.height, msg.width
@@ -198,11 +265,13 @@ class CylinderDetectorTask2Node(Node):
         combined_mask = np.zeros((h, w), dtype=np.uint8)
 
         # ---- 1) collect raw blob candidates across all colour buckets ----
+        colour_masks: dict[str, np.ndarray] = {}
         candidates = []
         for colour, ranges in COLOUR_BUCKETS:
             mask = _build_colour_mask(hsv, ranges)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _OPEN_KERNEL)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _OPEN_KERNEL)
+            colour_masks[colour] = mask
             combined_mask |= mask
 
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -262,30 +331,62 @@ class CylinderDetectorTask2Node(Node):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
                 continue
 
+            if not (BARREL_MIN_HEIGHT_M <= ps_map.point.z <= BARREL_MAX_HEIGHT_M):
+                continue
+
             mx, my = ps_map.point.x, ps_map.point.y
             if not self.map_bounds.is_in_bounds(mx, my):
                 continue
 
             track_id, is_new = self.tracker.update(mx, my, colour)
-            self._orientations[track_id] = orientation
+            if self._orientations.get(track_id) != 'fallen':
+                self._orientations[track_id] = orientation
+            effective_orientation = self._orientations[track_id]
+
+            # spill only makes sense for fallen barrels
+            spill_now = False
+            if effective_orientation == 'fallen':
+                spill_now, spill_dbg = self._find_spill(
+                    colour_masks[colour], c['cnt'], colour)
+                cv2.imshow('Spill Debug', spill_dbg)
+                if self._spill_debug_pub.get_subscription_count() > 0:
+                    try:
+                        self._spill_debug_pub.publish(
+                            self.bridge.cv2_to_imgmsg(spill_dbg, 'bgr8'))
+                    except CvBridgeError:
+                        pass
+            was_leaking = self._leaking.get(track_id, False)
+            self._leaking[track_id] = spill_now or was_leaking
+            is_leaking = self._leaking[track_id]
             count = self.tracker.get_count(track_id)
 
-            ps_map.header.frame_id = f'map/{colour}/{orientation}/{track_id}/{count}'
+            leak_tag = '/leaking' if is_leaking else ''
+            ps_map.header.frame_id = f'map/{colour}/{orientation}{leak_tag}/{track_id}/{count}'
             self._cyl_pub.publish(ps_map)
             any_published = True
 
             cv2.drawContours(debug, [cbox], 0, _bgr_for_colour(colour), 2)
-            cv2.putText(debug, f'{colour} {orientation} #{track_id} n={count}',
+            cv2.putText(debug, f'{colour} {effective_orientation} #{track_id} n={count}',
                         (rcx - 20, rcy), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                         _bgr_for_colour(colour), 2)
+            spill_label = 'SPILL' if is_leaking else 'no spill'
+            spill_colour = (0, 255, 255) if is_leaking else (180, 180, 180)
+            cv2.putText(debug, spill_label, (rcx - 20, rcy + 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, spill_colour, 2)
 
             if is_new:
                 self.get_logger().info(
                     f'NEW barrel #{track_id} {colour} {orientation} '
                     f"at ({mx:.2f},{my:.2f}) elong={c['elong']:.2f} tilt={c['tilt']:.0f}deg")
+            if spill_now and not was_leaking:
+                self.get_logger().info(f'SPILL detected near barrel #{track_id} ({colour})')
 
         cv2.putText(debug, f'barrels: {len(accepted)}', (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        cv2.imshow('Cylinder detector', debug)
+        cv2.imshow('Colour mask', combined_mask)
+        cv2.waitKey(1)
 
         if self._threshold_pub.get_subscription_count() > 0:
             try:
@@ -307,6 +408,7 @@ class CylinderDetectorTask2Node(Node):
         for track in self.tracker.tracks:
             colour = track.get('colour', 'unknown')
             orientation = self._orientations.get(track['id'], 'upright')
+            leaking = self._leaking.get(track['id'], False)
             count = track['count']
             fallen = orientation == 'fallen'
 
@@ -347,7 +449,8 @@ class CylinderDetectorTask2Node(Node):
             t.pose.orientation.w = 1.0
             t.scale.z = 0.15
             t.color = ColorRGBA(r=0.0, g=0.0, b=0.0, a=1.0)
-            t.text = f'{colour} {orientation} (n={count})'
+            leak_str = ' LEAKING' if leaking else ''
+            t.text = f'{colour} {orientation}{leak_str} (n={count})'
             arr.markers.append(t)
         self._marker_pub.publish(arr)
 
