@@ -97,16 +97,17 @@ local_costmap:
                   [-0.070,  0.070],
                   [ 0.000,  0.100],
                   [ 0.070,  0.070]]"
-      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
-      filters: ["keepout_filter"]
+      plugins: ["static_layer", "voxel_layer", "keepout_static_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.5
         inflation_radius: 0.30
-      keepout_filter:
-        plugin: "nav2_costmap_2d::KeepoutFilter"
-        enabled: True
-        filter_info_topic: "/costmap_filter_info"
+      keepout_static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /keepout_filter_mask
+        map_subscribe_transient_local: true
+        subscribe_to_updates: false
+        enabled: true
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -150,8 +151,7 @@ global_costmap:
                   [ 0.070,  0.070]]"
       resolution: 0.06
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      filters: ["keepout_filter"]
+      plugins: ["static_layer", "obstacle_layer", "keepout_static_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -169,14 +169,16 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+      keepout_static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /keepout_filter_mask
+        map_subscribe_transient_local: true
+        subscribe_to_updates: false
+        enabled: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.5
         inflation_radius: 0.30
-      keepout_filter:
-        plugin: "nav2_costmap_2d::KeepoutFilter"
-        enabled: True
-        filter_info_topic: "/costmap_filter_info"
       always_send_full_costmap: true
 
 planner_server:

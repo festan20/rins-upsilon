@@ -170,22 +170,6 @@ def generate_launch_description():
         ],
     )
 
-    keepout_filter_info_server = Node(
-        package='nav2_map_server',
-        executable='costmap_filter_info_server',
-        name='costmap_filter_info_server',
-        namespace=LaunchConfiguration('namespace'),
-        output='screen',
-        parameters=[
-            {'use_sim_time': LaunchConfiguration('use_sim_time')},
-            {'type': 0},
-            {'filter_info_topic': '/costmap_filter_info'},
-            {'mask_topic': '/keepout_filter_mask'},
-            {'base': 0.0},
-            {'multiplier': 1.0},
-        ],
-    )
-
     keepout_lifecycle_manager = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
@@ -195,7 +179,7 @@ def generate_launch_description():
         parameters=[
             {'use_sim_time': LaunchConfiguration('use_sim_time')},
             {'autostart': True},
-            {'node_names': ['keepout_mask_server', 'costmap_filter_info_server']},
+            {'node_names': ['keepout_mask_server']},
         ],
     )
 
@@ -260,21 +244,21 @@ def generate_launch_description():
         ],
     )
 
-    # ring_detector = Node(
-    #     package='upsilon',
-    #     executable='ring_detector_task2',
-    #     name='ring_detector_task2',
-    #     output='screen',
-    #     parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
-    # )
+    ring_detector = Node(
+        package='upsilon',
+        executable='ring_detector_task2',
+        name='ring_detector_task2',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
+    )
 
-    # cylinder_detector = Node(
-    #     package='upsilon',
-    #     executable='cylinder_detector_task2',
-    #     name='cylinder_detector_task2',
-    #     output='screen',
-    #     parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
-    # )
+    cylinder_detector = Node(
+        package='upsilon',
+        executable='cylinder_detector_task2',
+        name='cylinder_detector_task2',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}, *CAM_PARAMS],
+    )
 
     speech = Node(
         package='upsilon',
@@ -346,7 +330,6 @@ def generate_launch_description():
     ld.add_action(laser_filter)
     ld.add_action(localization)
     ld.add_action(keepout_mask_server)
-    ld.add_action(keepout_filter_info_server)
     ld.add_action(keepout_lifecycle_manager)
     ld.add_action(nav2)
     ld.add_action(arm_control)
@@ -354,8 +337,8 @@ def generate_launch_description():
     ld.add_action(top_camera_init_pose)
     ld.add_action(face_detector)
     ld.add_action(qr_reader)
-    # ld.add_action(ring_detector)
-    # ld.add_action(cylinder_detector)
+    ld.add_action(ring_detector)
+    ld.add_action(cylinder_detector)
     ld.add_action(speech)
     ld.add_action(controller)
     ld.add_action(visualizer)

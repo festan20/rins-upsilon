@@ -48,6 +48,12 @@ NUM_RINGS_TO_VISIT = 2     # target number of rings to visit
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #Task2
+    (0.823, -1.47, 0.0),
+    (-0.46, -3.88, 0.0),
+    (-2.98, -2.848, 0.0),
+    (-4.13, -0.924, 0.0),
+    (-2.53, 0.0924, 0.0),
+    (-1.26, -2.027, 0.0),
     (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
     
@@ -184,9 +190,9 @@ class ControllerNode(Node):
         self._costmap = CostmapChecker(self)
 
         # Subscribers
-        self.create_subscription(PointStamped, '/detected_rings',
+        self.create_subscription(PointStamped, '/detected_rings_task2',
                                  self._ring_cb, 10, callback_group=self._cbg)
-        self.create_subscription(PointStamped, '/detected_faces',
+        self.create_subscription(PointStamped, '/detected_faces_task2',
                                  self._face_cb, 10, callback_group=self._cbg)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose',
                                  self._amcl_cb, amcl_qos, callback_group=self._cbg)
@@ -266,13 +272,21 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     def _run_mission(self) -> None:
         self._wait_for_nav2()
-        self.get_logger().info('Nav2 is up. Driving to blue-line start checkpoint.')
+        self.get_logger().info('Nav2 is up. Starting exploration.')
 
         self._explore()
+
+        self.get_logger().info('Exploration done. Visiting detected faces.')
+        self._visit_faces()
+
+        self.get_logger().info('Face visits done. Navigating to blue-line start.')
+        last_wp = EXPLORATION_WAYPOINTS[-1]
+        self._navigate_to(*last_wp, timeout=120.0)
+
         if self._activate_blue_line_following():
-            self.get_logger().info('Blue-line follower activated. Controller mission handoff complete.')
+            self.get_logger().info('Blue-line follower activated. Mission handoff complete.')
         else:
-            self.get_logger().error('Blue-line follower activation failed. Not running legacy face/ring visit logic.')
+            self.get_logger().error('Blue-line follower activation failed.')
 
     # ------------------------------------------------------------------
     # Phase 1 — EXPLORE
@@ -285,14 +299,26 @@ class ControllerNode(Node):
         return all(f.count > 15 for f in top_faces) and all(r.count > 15 for r in top_rings)
 
     def _explore(self) -> None:
-        for i, wp in enumerate(EXPLORATION_WAYPOINTS):
+        waypoints = EXPLORATION_WAYPOINTS[:-1]  # last waypoint is the blue-line start
+        for i, wp in enumerate(waypoints):
             self.get_logger().info(
-                f'Waypoint {i+1}/{len(EXPLORATION_WAYPOINTS)} '
+                f'Waypoint {i+1}/{len(waypoints)} '
                 f'({wp[0]:.1f}, {wp[1]:.1f})')
-
             self._navigate_to(*wp)
             # self.get_logger().info('Waypoint reached, spinning 360°')
             # self._spin_360()
+
+    def _visit_faces(self) -> None:
+        """Approach and greet every detected face, in discovery order."""
+        faces = sorted(self._faces.values(), key=lambda f: f.seen_order)
+        if not faces:
+            self.get_logger().warn('No faces detected — skipping face visit phase.')
+            return
+        for face in faces:
+            self.get_logger().info(
+                f'Visiting face #{face.track_id} at ({face.x:.2f}, {face.y:.2f})')
+            self._approach_and_announce(face.x, face.y, f'face #{face.track_id}', 'Hello')
+        self.get_logger().info(f'Visited {len(faces)} face(s).')
 
     def _activate_blue_line_following(self) -> bool:
         """Enable blue-line follower runtime mode via service call."""
@@ -444,7 +470,8 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     # Blocking navigation
     # ------------------------------------------------------------------
-    def _navigate_to(self, x: float, y: float, yaw: float) -> bool:
+    def _navigate_to(self, x: float, y: float, yaw: float,
+                     timeout: float = NAV_TIMEOUT_S) -> bool:
         """Send a nav goal and block until it completes or times out."""
         pose = self._make_pose(x, y, yaw)
 
@@ -460,7 +487,7 @@ class ControllerNode(Node):
         t0 = time.monotonic()
         while not send_future.done():
             time.sleep(POLL_INTERVAL_S)
-            if time.monotonic() - t0 > NAV_TIMEOUT_S:
+            if time.monotonic() - t0 > timeout:
                 self.get_logger().warn('Nav goal acceptance timed out.')
                 return False
 
@@ -473,7 +500,7 @@ class ControllerNode(Node):
         result_future = goal_handle.get_result_async()
         while not result_future.done():
             time.sleep(POLL_INTERVAL_S)
-            if time.monotonic() - t0 > NAV_TIMEOUT_S:
+            if time.monotonic() - t0 > timeout:
                 self.get_logger().warn('Nav goal timed out; cancelling.')
                 goal_handle.cancel_goal_async()
                 return False
