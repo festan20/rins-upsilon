@@ -134,14 +134,18 @@ class CostmapChecker:
         self._height = msg.info.height
 
     def is_free(self, x: float, y: float, threshold: int = 50) -> bool:
+        return self.cost_at(x, y) < threshold
+
+    def cost_at(self, x: float, y: float) -> int:
+        """Return costmap cost [0-254] at (x, y); 255 if unknown or out of bounds."""
         if self._data is None:
-            return True
+            return 0
         col = int((x - self._origin_x) / self._resolution)
         row = int((y - self._origin_y) / self._resolution)
         if not (0 <= col < self._width and 0 <= row < self._height):
-            return False
+            return 255
         val = self._data[row * self._width + col]
-        return 0 <= val < threshold
+        return val if val >= 0 else 255  # -1 = unknown → treat as lethal
 
 
 class Ring:
@@ -357,43 +361,42 @@ class ControllerNode(Node):
                             ) -> tuple[float, float, float]:
         """Pick an approach pose APPROACH_DISTANCE from the target, facing it.
 
-        Samples ``APPROACH_CANDIDATES`` points on a ring around the target,
-        starting from the side closest to the robot, then fanning out.
-        Returns the first one whose cell is free in the global costmap.
-        If nothing is free (or the costmap hasn't arrived yet) it falls back
-        to the natural-side point. ``yaw`` is always set so the robot faces
-        the target.
+        Scores all candidate angles by costmap cost and picks the one with the
+        most clearance.  Because faces/rings sit on walls, candidates on the
+        wall side are lethal/inflated, so the minimum-cost candidate is
+        automatically the open-space direction the robot should approach from.
+        Falls back to the robot-relative direction if no candidate is free.
         """
-        dx = self._current_pose_x - target_x
-        dy = self._current_pose_y - target_y
-        base_angle = math.atan2(dy, dx)  # direction target → robot
-
         step = 2.0 * math.pi / APPROACH_CANDIDATES
-        # Interleaved fan-out: 0, +step, -step, +2*step, -2*step, ...
-        angles = [base_angle]
-        for k in range(1, APPROACH_CANDIDATES // 2 + 1):
-            angles.append(base_angle + k * step)
-            angles.append(base_angle - k * step)
+        angles = [i * step for i in range(APPROACH_CANDIDATES)]
+
+        best_pose = None
+        best_cost = 255  # lethal sentinel
 
         for angle in angles:
             ax = target_x + APPROACH_DISTANCE * math.cos(angle)
             ay = target_y + APPROACH_DISTANCE * math.sin(angle)
-            if self._costmap.is_free(ax, ay):
-                yaw = math.atan2(target_y - ay, target_x - ax)
-                self.get_logger().info(
-                    f'Approach pose at ({ax:.2f}, {ay:.2f}), '
-                    f'angle={math.degrees(angle):+.0f}°, '
-                    f'yaw={math.degrees(yaw):+.0f}°'
-                )
-                return ax, ay, yaw
+            cost = self._costmap.cost_at(ax, ay)
+            if cost < 50 and cost < best_cost:
+                best_cost = cost
+                best_pose = (ax, ay, math.atan2(target_y - ay, target_x - ax))
 
-        # Every candidate blocked — fall back to natural side anyway
+        if best_pose is not None:
+            ax, ay, yaw = best_pose
+            self.get_logger().info(
+                f'Approach pose at ({ax:.2f}, {ay:.2f}) cost={best_cost} '
+                f'yaw={math.degrees(yaw):+.0f}°')
+            return best_pose
+
+        # Every candidate blocked — fall back to robot-relative direction
         self.get_logger().warn(
-            'No free approach pose around target; using natural side.')
+            'No free approach pose found; falling back to robot-relative direction.')
+        dx = self._current_pose_x - target_x
+        dy = self._current_pose_y - target_y
+        base_angle = math.atan2(dy, dx)
         ax = target_x + APPROACH_DISTANCE * math.cos(base_angle)
         ay = target_y + APPROACH_DISTANCE * math.sin(base_angle)
-        yaw = math.atan2(target_y - ay, target_x - ax)
-        return ax, ay, yaw
+        return ax, ay, math.atan2(target_y - ay, target_x - ax)
 
     def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
         """Navigate to APPROACH_DISTANCE from (x, y), face it, speak, and pause."""

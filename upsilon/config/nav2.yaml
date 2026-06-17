@@ -101,7 +101,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.5
-        inflation_radius: 0.30
+        inflation_radius: 0.45
       keepout_static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_topic: /keepout_filter_mask
@@ -178,7 +178,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.5
-        inflation_radius: 0.30
+        inflation_radius: 0.45
       always_send_full_costmap: true
 
 planner_server:
