@@ -143,6 +143,16 @@ class CylinderDetectorTask2Node(Node):
         self._spill_debug_pub = self.create_publisher(Image, '/cylinder_detector_task2/spill_debug', 10)
 
         self.get_logger().info('Cylinder detector (Task 2) ready — cloud + dedup.')
+        self._watchdog = self.create_timer(20.0, self._startup_watchdog)
+
+    def _startup_watchdog(self) -> None:
+        self._watchdog.cancel()
+        if self._latest_bgr is None:
+            self.get_logger().error(
+                'STARTUP FAILURE: no RGB image received after 20 s. '
+                'Camera topics are not connecting — restart the node.')
+        else:
+            self.get_logger().info('Startup watchdog OK — camera data is flowing.')
 
     # ------------------------------------------------------------------
     def _rgb_cb(self, msg: Image) -> None:

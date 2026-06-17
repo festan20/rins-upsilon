@@ -212,11 +212,11 @@ def generate_launch_description():
     )
 
     top_camera_init_pose = TimerAction(
-        period=8.0,
+        period=20.0,
         actions=[
             ExecuteProcess(
                 cmd=[
-                    'ros2', 'topic', 'pub', '--once',
+                    'ros2', 'topic', 'pub', '--times', '5', '--rate', '1',
                     '/arm_command', 'std_msgs/msg/String',
                     "data: 'manual:[0.0, 0.6, 0.5, 2.0]'",
                 ],
@@ -336,12 +336,17 @@ def generate_launch_description():
     ld.add_action(arm_mover)
     ld.add_action(top_camera_init_pose)
     ld.add_action(face_detector)
-    ld.add_action(qr_reader)
-    ld.add_action(ring_detector)
-    ld.add_action(cylinder_detector)
     ld.add_action(speech)
     ld.add_action(controller)
-    ld.add_action(visualizer)
-    ld.add_action(blue_line_detector)
-    ld.add_action(blue_line_follower)
+    # Delay the fast-starting detector nodes so DDS publisher discovery is
+    # complete before they subscribe (face_detector has a natural delay from
+    # YOLOv8 model loading; these don't).
+    ld.add_action(TimerAction(period=15.0, actions=[
+        qr_reader,
+        ring_detector,
+        cylinder_detector,
+        visualizer,
+        blue_line_detector,
+        blue_line_follower,
+    ]))
     return ld

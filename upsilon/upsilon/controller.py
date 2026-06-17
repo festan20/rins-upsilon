@@ -37,8 +37,8 @@ from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 # --------------------------------------------------------------------------
 # Tuning parameters
 # --------------------------------------------------------------------------
-APPROACH_DISTANCE = 0.5    # metres — stop this far from a ring
-LOOK_DURATION_S   = 5.0    # seconds to pause looking at a ring (also lets TTS finish)
+APPROACH_DISTANCE = 0.7    # metres — stop this far from a face/ring
+LOOK_DURATION_S   = 5.0    # seconds to pause looking at a face/ring (also lets TTS finish)
 NAV_TIMEOUT_S     = 30.0   # give up on a nav goal after this long
 SPIN_TIMEOUT_S    = 20.0   # give up on a spin after this long
 POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
@@ -53,7 +53,6 @@ EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     (-2.98, -2.848, 0.0),
     (-4.13, -0.924, 0.0),
     (-2.53, 0.0924, 0.0),
-    (-1.26, -2.027, 0.0),
     (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
     
@@ -161,12 +160,14 @@ class Ring:
 
 class Face:
     def __init__(self, x: float, y: float, track_id: int = -1, count: int = 1,
-                 seen_order: int = 0):
+                 seen_order: int = 0, seen_from_x: float = 0.0, seen_from_y: float = 0.0):
         self.x = x
         self.y = y
         self.track_id = track_id
         self.seen_order = seen_order  # global discovery index (higher = seen later)
         self.count = count
+        self.seen_from_x = seen_from_x  # robot position when first detected
+        self.seen_from_y = seen_from_y
 
 
 class ControllerNode(Node):
@@ -258,14 +259,18 @@ class ControllerNode(Node):
         track_id = int(parts[1]) if len(parts) >= 2 else -1
         count = int(parts[2]) if len(parts) >= 3 else 1
 
-        # Preserve discovery order for known tracks; assign next index for new ones
+        # Preserve discovery order and first-detection origin for known tracks
         if track_id in self._faces:
             seen_order = self._faces[track_id].seen_order
+            seen_from_x = self._faces[track_id].seen_from_x
+            seen_from_y = self._faces[track_id].seen_from_y
         else:
             seen_order = self._discovery_counter
             self._discovery_counter += 1
+            seen_from_x = self._current_pose_x
+            seen_from_y = self._current_pose_y
 
-        self._faces[track_id] = Face(x, y, track_id, count, seen_order)
+        self._faces[track_id] = Face(x, y, track_id, count, seen_order, seen_from_x, seen_from_y)
         self.get_logger().info(
             f'Face #{track_id} count={count} at ({x:.2f}, {y:.2f}) '
             f'— {len(self._faces)} unique tracks')
@@ -321,7 +326,9 @@ class ControllerNode(Node):
         for face in faces:
             self.get_logger().info(
                 f'Visiting face #{face.track_id} at ({face.x:.2f}, {face.y:.2f})')
-            self._approach_and_announce(face.x, face.y, f'face #{face.track_id}', 'Hello')
+            self._approach_and_announce(
+                face.x, face.y, f'face #{face.track_id}', 'Hello',
+                hint_x=face.seen_from_x, hint_y=face.seen_from_y)
         self.get_logger().info(f'Visited {len(faces)} face(s).')
 
     def _activate_blue_line_following(self) -> bool:
@@ -357,16 +364,42 @@ class ControllerNode(Node):
     # ------------------------------------------------------------------
     # Phase 2 — VISIT
     # ------------------------------------------------------------------
-    def _find_approach_pose(self, target_x: float, target_y: float
-                            ) -> tuple[float, float, float]:
-        """Pick an approach pose APPROACH_DISTANCE from the target, facing it.
+    # Shift face/ring position this far toward detection origin before sampling
+    # approach candidates. Ensures the sampled point is in free space, so
+    # wall-side candidates always have higher cost than open-side ones.
+    _FACE_SHIFT = 0.15  # metres
 
-        Scores all candidate angles by costmap cost and picks the one with the
-        most clearance.  Because faces/rings sit on walls, candidates on the
-        wall side are lethal/inflated, so the minimum-cost candidate is
-        automatically the open-space direction the robot should approach from.
-        Falls back to the robot-relative direction if no candidate is free.
+    def _find_approach_pose(self, target_x: float, target_y: float,
+                            hint_x: float | None = None,
+                            hint_y: float | None = None,
+                            ) -> tuple[float, float, float]:
+        """Pick an approach pose near APPROACH_DISTANCE from the target, facing it.
+
+        If hint_x/hint_y are given (robot position at detection time), the
+        sample centre is shifted _FACE_SHIFT metres toward the hint so it lands
+        in free space.  Approach candidates are then sampled at
+        (APPROACH_DISTANCE - _FACE_SHIFT) from the shifted centre, keeping the
+        final stopping distance from the actual target the same.
+
+        Scores all candidates by costmap cost and picks the one with the most
+        clearance. Falls back to the robot-relative direction if none are free.
         """
+        # Optionally shift sample centre toward the detection origin.
+        if hint_x is not None and hint_y is not None:
+            dx = hint_x - target_x
+            dy = hint_y - target_y
+            d = math.sqrt(dx * dx + dy * dy)
+            if d > 0.1:
+                sample_x = target_x + self._FACE_SHIFT * dx / d
+                sample_y = target_y + self._FACE_SHIFT * dy / d
+                sample_dist = max(APPROACH_DISTANCE - self._FACE_SHIFT, 0.3)
+            else:
+                sample_x, sample_y = target_x, target_y
+                sample_dist = APPROACH_DISTANCE
+        else:
+            sample_x, sample_y = target_x, target_y
+            sample_dist = APPROACH_DISTANCE
+
         step = 2.0 * math.pi / APPROACH_CANDIDATES
         angles = [i * step for i in range(APPROACH_CANDIDATES)]
 
@@ -374,11 +407,12 @@ class ControllerNode(Node):
         best_cost = 255  # lethal sentinel
 
         for angle in angles:
-            ax = target_x + APPROACH_DISTANCE * math.cos(angle)
-            ay = target_y + APPROACH_DISTANCE * math.sin(angle)
+            ax = sample_x + sample_dist * math.cos(angle)
+            ay = sample_y + sample_dist * math.sin(angle)
             cost = self._costmap.cost_at(ax, ay)
             if cost < 50 and cost < best_cost:
                 best_cost = cost
+                # yaw always faces the original (unshifted) target
                 best_pose = (ax, ay, math.atan2(target_y - ay, target_x - ax))
 
         if best_pose is not None:
@@ -398,11 +432,12 @@ class ControllerNode(Node):
         ay = target_y + APPROACH_DISTANCE * math.sin(base_angle)
         return ax, ay, math.atan2(target_y - ay, target_x - ax)
 
-    def _approach_and_announce(self, x: float, y: float, label: str, sound: str) -> None:
+    def _approach_and_announce(self, x: float, y: float, label: str, sound: str,
+                               hint_x: float | None = None,
+                               hint_y: float | None = None) -> None:
         """Navigate to APPROACH_DISTANCE from (x, y), face it, speak, and pause."""
-        ax, ay, yaw = self._find_approach_pose(x, y)
+        ax, ay, yaw = self._find_approach_pose(x, y, hint_x, hint_y)
         self._navigate_to(ax, ay, yaw)
-
         self.get_logger().info(
             f'Arrived at {label}. Announcing for {LOOK_DURATION_S}s...')
         self._say(sound)

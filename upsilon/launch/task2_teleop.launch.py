@@ -31,7 +31,7 @@ QR topic: ros2 topic echo /qr_instructions_task2
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -304,10 +304,12 @@ def generate_launch_description():
     ld.add_action(nav2)
     ld.add_action(arm_control)
     ld.add_action(arm_mover)
-    ld.add_action(tile_detection)
     ld.add_action(face_detector)
-    ld.add_action(qr_reader)
-    ld.add_action(ring_detector)
-    ld.add_action(cylinder_detector)
-    ld.add_action(visualizer)
+    ld.add_action(TimerAction(period=15.0, actions=[
+        tile_detection,
+        qr_reader,
+        ring_detector,
+        cylinder_detector,
+        visualizer,
+    ]))
     return ld
