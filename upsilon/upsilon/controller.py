@@ -48,11 +48,11 @@ NUM_RINGS_TO_VISIT = 2     # target number of rings to visit
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #Task2
-    #(0.823, -1.47, 0.0),
-    #(-0.46, -3.88, 0.0),
-    #(-2.98, -2.848, 0.0),
-    #(-4.13, -0.924, 0.0),
-    #(-2.53, 0.0924, 0.0),
+    (0.823, -1.47, 0.0),
+    (-0.46, -3.88, 0.0),
+    (-2.98, -2.848, 0.0),
+    (-4.13, -0.924, 0.0),
+    (-2.53, 0.0924, 0.0),
     (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
     
