@@ -36,7 +36,6 @@ class VisualizerNode(Node):
                 ('top_rgb_topic', '/top_camera/rgb/preview/image_raw'),
                 ('top_compressed_rgb', False),
                 ('face_debug_topic', '/face_detector/debug'),
-                ('qr_debug_topic', ''),
                 ('ring_debug_topic', '/ring_detector/debug'),
                 ('cylinder_debug_topic', ''),
                 ('tile_result_topic', '/tile_detection/result'),
@@ -49,7 +48,6 @@ class VisualizerNode(Node):
         self.top_rgb_topic = self.get_parameter('top_rgb_topic').get_parameter_value().string_value
         self.top_compressed_rgb = self.get_parameter('top_compressed_rgb').get_parameter_value().bool_value
         self.face_debug_topic = self.get_parameter('face_debug_topic').get_parameter_value().string_value
-        self.qr_debug_topic = self.get_parameter('qr_debug_topic').get_parameter_value().string_value
         self.ring_debug_topic = self.get_parameter('ring_debug_topic').get_parameter_value().string_value
         self.cylinder_debug_topic = self.get_parameter('cylinder_debug_topic').get_parameter_value().string_value
         self.tile_result_topic = self.get_parameter('tile_result_topic').get_parameter_value().string_value
@@ -60,31 +58,28 @@ class VisualizerNode(Node):
         # Only subscribe to compressed RGB (small) and local debug topics
         rgb_msg_type = CompressedImage if self.compressed_rgb else Image
         top_rgb_msg_type = CompressedImage if self.top_compressed_rgb else Image
-        self.create_subscription(
-            rgb_msg_type, self.rgb_topic,
-            self._rgb_cb, QOS_LATEST)
+        # --- TESTING: keep only Top Camera / Tile / Anomaly (revert later) ---
+        # self.create_subscription(
+        #     rgb_msg_type, self.rgb_topic,
+        #     self._rgb_cb, QOS_LATEST)
         self.create_subscription(
             top_rgb_msg_type, self.top_rgb_topic,
             self._top_rgb_cb, QOS_LATEST)
-        self.create_subscription(
-            Image, self.face_debug_topic,
-            self._face_debug_cb, QOS_LATEST)
-        if self.qr_debug_topic:
-            self.create_subscription(
-                Image, self.qr_debug_topic,
-                self._qr_debug_cb, QOS_LATEST)
-        self.create_subscription(
-            Image, self.ring_debug_topic,
-            self._ring_debug_cb, QOS_LATEST)
+        # self.create_subscription(
+        #     Image, self.face_debug_topic,
+        #     self._face_debug_cb, QOS_LATEST)
+        # self.create_subscription(
+        #     Image, self.ring_debug_topic,
+        #     self._ring_debug_cb, QOS_LATEST)
 
-        window_names = ['Camera POV', 'Top Camera POV', 'Face Detection', 'Ring Detection']
-        if self.qr_debug_topic:
-            window_names.append('QR Detection')
-        if self.cylinder_debug_topic:
-            self.create_subscription(
-                Image, self.cylinder_debug_topic,
-                self._cylinder_debug_cb, QOS_LATEST)
-            window_names.append('Cylinder Detection')
+        # TESTING: keep only Top Camera / Tile / Anomaly (revert later)
+        # window_names = ['Camera POV', 'Top Camera POV', 'Face Detection', 'Ring Detection']
+        window_names = ['Top Camera POV']
+        # if self.cylinder_debug_topic:
+        #     self.create_subscription(
+        #         Image, self.cylinder_debug_topic,
+        #         self._cylinder_debug_cb, QOS_LATEST)
+        #     window_names.append('Cylinder Detection')
         if self.tile_result_topic:
             self.create_subscription(
                 Image, self.tile_result_topic,
@@ -135,13 +130,6 @@ class VisualizerNode(Node):
         except CvBridgeError:
             return
         cv2.imshow('Face Detection', frame)
-
-    def _qr_debug_cb(self, msg: Image) -> None:
-        try:
-            frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        except CvBridgeError:
-            return
-        cv2.imshow('QR Detection', frame)
 
     def _ring_debug_cb(self, msg: Image) -> None:
         try:

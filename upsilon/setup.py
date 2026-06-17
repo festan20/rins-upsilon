@@ -35,6 +35,7 @@ setup(
             'blue_line_detector = upsilon.blue_line_detector:main',
             'blue_line_follower = upsilon.blue_line_follower:main',
             'controller = upsilon.controller:main',
+            'anomaly_controller = upsilon.anomaly_controller:main',
             'speech = upsilon.speech:main',
             'visualizer = upsilon.visualizer:main',
             'camera_viewer = upsilon.camera_viewer:main',

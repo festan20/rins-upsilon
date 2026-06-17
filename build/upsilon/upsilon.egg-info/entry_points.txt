@@ -1,4 +1,5 @@
 [console_scripts]
+anomaly_controller = upsilon.anomaly_controller:main
 anomaly_detector = upsilon.anomaly_detector:main
 blue_line_detector = upsilon.blue_line_detector:main
 blue_line_follower = upsilon.blue_line_follower:main

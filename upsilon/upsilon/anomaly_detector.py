@@ -1,4 +1,4 @@
-"""Anomaly detection node — runs a UNet segmentation model on the latest tile image
+"""Anomaly detection node — runs a UNet++ segmentation model on the latest tile image
 to detect surface anomalies (cracks, damage, etc.).
 
 Depends on tile_detection node: subscribes to /tile_detection/result for the warped
@@ -44,7 +44,7 @@ class AnomalyDetectorNode(Node):
         super().__init__('anomaly_detector')
 
         self.declare_parameter('checkpoint', '')
-        self.declare_parameter('encoder', 'efficientnet-b0')
+        self.declare_parameter('encoder', 'efficientnet-b4')
         self.declare_parameter('threshold', 0.5)
         self.declare_parameter('tile_topic', '/tile_detection/result')
 
