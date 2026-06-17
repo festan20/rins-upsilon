@@ -12,3 +12,7 @@ __pycache__/
 # Editor and OS noise
 .vscode/
 .DS_Store
+
+# Large ML artifacts — keep out of git (GitHub warns >50 MB)
+upsilon/checkpoints/
+*.pth
