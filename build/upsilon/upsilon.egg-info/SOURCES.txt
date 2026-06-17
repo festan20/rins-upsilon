@@ -1,13 +1,6 @@
 package.xml
 setup.cfg
 setup.py
-../build/upsilon/upsilon.egg-info/PKG-INFO
-../build/upsilon/upsilon.egg-info/SOURCES.txt
-../build/upsilon/upsilon.egg-info/dependency_links.txt
-../build/upsilon/upsilon.egg-info/entry_points.txt
-../build/upsilon/upsilon.egg-info/requires.txt
-../build/upsilon/upsilon.egg-info/top_level.txt
-../build/upsilon/upsilon.egg-info/zip-safe
 config/keepout_mask.pgm
 config/keepout_mask.yaml
 config/localization.yaml
@@ -31,6 +24,7 @@ sounds/hello.mp3
 sounds/orange.mp3
 sounds/red.mp3
 upsilon/__init__.py
+upsilon/anomaly_controller.py
 upsilon/anomaly_detector.py
 upsilon/anomaly_model.py
 upsilon/blue_line_detector.py
@@ -48,3 +42,10 @@ upsilon/speech.py
 upsilon/tile_detection.py
 upsilon/visualizer.py
 upsilon/wasd_teleop.py
+upsilon.egg-info/PKG-INFO
+upsilon.egg-info/SOURCES.txt
+upsilon.egg-info/dependency_links.txt
+upsilon.egg-info/entry_points.txt
+upsilon.egg-info/requires.txt
+upsilon.egg-info/top_level.txt
+upsilon.egg-info/zip-safe

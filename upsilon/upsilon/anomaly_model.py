@@ -1,11 +1,10 @@
 import segmentation_models_pytorch as smp
-import torch
 import torch.nn as nn
 
 
-def build_model(encoder="efficientnet-b0", pretrained=True):
+def build_model(encoder="efficientnet-b4", pretrained=True):
     weights = "imagenet" if pretrained else None
-    model = smp.Unet(
+    model = smp.UnetPlusPlus(
         encoder_name=encoder,
         encoder_weights=weights,
         in_channels=3,
@@ -15,21 +14,13 @@ def build_model(encoder="efficientnet-b0", pretrained=True):
     return model
 
 
-class DiceBCELoss(nn.Module):
-    def __init__(self, bce_weight=0.5, smooth=1.0):
+class DiceFocalLoss(nn.Module):
+    def __init__(self, focal_weight=0.5, alpha=0.25, gamma=2.0):
         super().__init__()
-        self.bce_weight = bce_weight
-        self.smooth = smooth
-        self.bce = nn.BCEWithLogitsLoss()
+        self.focal_weight = focal_weight
+        self.dice = smp.losses.DiceLoss(mode="binary", smooth=1.0)
+        self.focal = smp.losses.FocalLoss(mode="binary", alpha=alpha, gamma=gamma)
 
     def forward(self, logits, targets):
-        bce_loss = self.bce(logits, targets)
-
-        probs = torch.sigmoid(logits)
-        intersection = (probs * targets).sum(dim=(2, 3))
-        dice_loss = 1 - (2 * intersection + self.smooth) / (
-            probs.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) + self.smooth
-        )
-        dice_loss = dice_loss.mean()
-
-        return self.bce_weight * bce_loss + (1 - self.bce_weight) * dice_loss
+        return (1 - self.focal_weight) * self.dice(logits, targets) + \
+               self.focal_weight * self.focal(logits, targets)

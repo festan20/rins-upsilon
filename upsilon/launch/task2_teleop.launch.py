@@ -260,8 +260,8 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'use_sim_time': use_sim_time},
-            {'checkpoint': '/home/upsilon/colcon_ws/rins-upsilon/upsilon/checkpoints/anomaly_best.pth'},
-            {'encoder': 'efficientnet-b0'},
+            {'checkpoint': '/home/upsilon/colcon_ws/rins-upsilon/upsilon/checkpoints/anomaly_results/best_model.pth'},
+            {'encoder': 'efficientnet-b4'},
             {'threshold': 0.5},
         ],
     )

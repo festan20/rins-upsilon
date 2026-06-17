@@ -58,25 +58,28 @@ class VisualizerNode(Node):
         # Only subscribe to compressed RGB (small) and local debug topics
         rgb_msg_type = CompressedImage if self.compressed_rgb else Image
         top_rgb_msg_type = CompressedImage if self.top_compressed_rgb else Image
-        self.create_subscription(
-            rgb_msg_type, self.rgb_topic,
-            self._rgb_cb, QOS_LATEST)
+        # --- TESTING: keep only Top Camera / Tile / Anomaly (revert later) ---
+        # self.create_subscription(
+        #     rgb_msg_type, self.rgb_topic,
+        #     self._rgb_cb, QOS_LATEST)
         self.create_subscription(
             top_rgb_msg_type, self.top_rgb_topic,
             self._top_rgb_cb, QOS_LATEST)
-        self.create_subscription(
-            Image, self.face_debug_topic,
-            self._face_debug_cb, QOS_LATEST)
-        self.create_subscription(
-            Image, self.ring_debug_topic,
-            self._ring_debug_cb, QOS_LATEST)
+        # self.create_subscription(
+        #     Image, self.face_debug_topic,
+        #     self._face_debug_cb, QOS_LATEST)
+        # self.create_subscription(
+        #     Image, self.ring_debug_topic,
+        #     self._ring_debug_cb, QOS_LATEST)
 
-        window_names = ['Camera POV', 'Top Camera POV', 'Face Detection', 'Ring Detection']
-        if self.cylinder_debug_topic:
-            self.create_subscription(
-                Image, self.cylinder_debug_topic,
-                self._cylinder_debug_cb, QOS_LATEST)
-            window_names.append('Cylinder Detection')
+        # TESTING: keep only Top Camera / Tile / Anomaly (revert later)
+        # window_names = ['Camera POV', 'Top Camera POV', 'Face Detection', 'Ring Detection']
+        window_names = ['Top Camera POV']
+        # if self.cylinder_debug_topic:
+        #     self.create_subscription(
+        #         Image, self.cylinder_debug_topic,
+        #         self._cylinder_debug_cb, QOS_LATEST)
+        #     window_names.append('Cylinder Detection')
         if self.tile_result_topic:
             self.create_subscription(
                 Image, self.tile_result_topic,
