@@ -225,6 +225,28 @@ def generate_launch_description():
         ],
     )
 
+    tile_detection = Node(
+        package='upsilon',
+        executable='tile_detection',
+        name='tile_detection',
+        output='screen',
+        parameters=[
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+            {'rgb_topic': '/top_camera/rgb/preview/image_raw'},
+        ],
+    )
+
+    anomaly_detector = Node(
+        package='upsilon',
+        executable='anomaly_detector',
+        name='anomaly_detector',
+        output='screen',
+        parameters=[
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+            {'checkpoint': PathJoinSubstitution([pkg_upsilon, 'checkpoints', 'anomaly_results', 'best_model.pth'])},
+        ],
+    )
+
     face_detector = Node(
         package='upsilon',
         executable='face_detector_task2',
@@ -337,11 +359,13 @@ def generate_launch_description():
     ld.add_action(top_camera_init_pose)
     ld.add_action(face_detector)
     ld.add_action(speech)
-    ld.add_action(controller)
+    ld.add_action(TimerAction(period=25.0, actions=[controller]))
     # Delay the fast-starting detector nodes so DDS publisher discovery is
     # complete before they subscribe (face_detector has a natural delay from
     # YOLOv8 model loading; these don't).
     ld.add_action(TimerAction(period=15.0, actions=[
+        tile_detection,
+        anomaly_detector,
         qr_reader,
         ring_detector,
         cylinder_detector,

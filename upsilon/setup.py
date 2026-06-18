@@ -15,6 +15,7 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'map'), glob('map/*')),
         (os.path.join('share', package_name, 'sounds'), glob('sounds/*')),
+        (os.path.join('share', package_name, 'checkpoints', 'anomaly_results'), glob('checkpoints/anomaly_results/*.pth')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

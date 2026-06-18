@@ -13,7 +13,10 @@ Published topics
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    qos_profile_sensor_data,
+    QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
+)
 
 import cv2
 import numpy as np
@@ -22,12 +25,19 @@ from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 from geometry_msgs.msg import PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import Bool, ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 
 from ultralytics import YOLO
 
 from upsilon.perception_utils import TF2Helper, IncrementalTrackManager
+
+_LATCHED_QOS = QoSProfile(
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 
 class FaceDetectorTask2Node(Node):
@@ -63,6 +73,9 @@ class FaceDetectorTask2Node(Node):
         self._face_pub = self.create_publisher(PointStamped, '/detected_faces_task2', 10)
         self._marker_pub = self.create_publisher(MarkerArray, '/face_markers_task2', 10)
         self._debug_pub = self.create_publisher(Image, '/face_detector_task2/debug', 10)
+
+        self._markers_enabled = True
+        self.create_subscription(Bool, '/markers_enabled', self._markers_enabled_cb, _LATCHED_QOS)
 
         self.model = YOLO(model_path)
 
@@ -213,8 +226,14 @@ class FaceDetectorTask2Node(Node):
 
         self._publish_markers()
 
+    def _markers_enabled_cb(self, msg: Bool) -> None:
+        self._markers_enabled = msg.data
+        self.get_logger().info(f'Marker publishing {"enabled" if msg.data else "disabled"}.')
+
     def _publish_markers(self) -> None:
         """Republish markers for ALL tracked faces."""
+        if not self._markers_enabled:
+            return
         arr = MarkerArray()
         now = self.get_clock().now().to_msg()
         for track in self.tracker.tracks:

@@ -26,7 +26,10 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    qos_profile_sensor_data,
+    QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
+)
 
 import cv2
 import numpy as np
@@ -35,10 +38,17 @@ from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 from geometry_msgs.msg import PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import Bool, ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 
 from upsilon.perception_utils import TF2Helper, IncrementalTrackManager, MapBoundsTracker
+
+_LATCHED_QOS = QoSProfile(
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 # --- blob gates ---
 BLOB_AREA_MIN = 600            # px²
@@ -141,6 +151,9 @@ class CylinderDetectorTask2Node(Node):
         self._debug_pub = self.create_publisher(Image, '/cylinder_detector_task2/debug', 10)
         self._threshold_pub = self.create_publisher(Image, '/cylinder_detector_task2/threshold', 10)
         self._spill_debug_pub = self.create_publisher(Image, '/cylinder_detector_task2/spill_debug', 10)
+
+        self._markers_enabled = True
+        self.create_subscription(Bool, '/markers_enabled', self._markers_enabled_cb, _LATCHED_QOS)
 
         self.get_logger().info('Cylinder detector (Task 2) ready — cloud + dedup.')
         self._watchdog = self.create_timer(20.0, self._startup_watchdog)
@@ -412,7 +425,13 @@ class CylinderDetectorTask2Node(Node):
                 pass
 
     # ------------------------------------------------------------------
+    def _markers_enabled_cb(self, msg: Bool) -> None:
+        self._markers_enabled = msg.data
+        self.get_logger().info(f'Marker publishing {"enabled" if msg.data else "disabled"}.')
+
     def _publish_markers(self) -> None:
+        if not self._markers_enabled:
+            return
         arr = MarkerArray()
         now = self.get_clock().now().to_msg()
         for track in self.tracker.tracks:

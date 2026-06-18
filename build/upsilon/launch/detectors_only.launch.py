@@ -1,1 +1,0 @@
-/home/upsilon/colcon_ws/rins-upsilon/upsilon/launch/detectors_only.launch.py

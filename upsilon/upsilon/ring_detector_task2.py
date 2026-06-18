@@ -22,7 +22,10 @@ Published topics
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    qos_profile_sensor_data,
+    QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
+)
 
 import cv2
 import numpy as np
@@ -30,10 +33,17 @@ import numpy as np
 from sensor_msgs.msg import Image, PointCloud2
 from geometry_msgs.msg import PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import Bool, ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 
 from upsilon.perception_utils import DepthCameraGeometry, TF2Helper, IncrementalTrackManager
+
+_LATCHED_QOS = QoSProfile(
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 # ---------------------------------------------------------------------------
 # Ellipse filter thresholds
@@ -125,6 +135,9 @@ class RingDetectorTask2Node(Node):
         self._debug_pub = self.create_publisher(Image, '/ring_detector_task2/debug', 10)
         self._treshold = self.create_publisher(Image, '/ring_detector_task2/threshold', 10)
         self._contour = self.create_publisher(Image, '/ring_detector_task2/contour', 10)
+
+        self._markers_enabled = True
+        self.create_subscription(Bool, '/markers_enabled', self._markers_enabled_cb, _LATCHED_QOS)
 
         self.get_logger().info('Ring detector (Task 2) ready.')
         self._watchdog = self.create_timer(20.0, self._startup_watchdog)
@@ -400,7 +413,13 @@ class RingDetectorTask2Node(Node):
         return results, len(elps)
 
     # ------------------------------------------------------------------
+    def _markers_enabled_cb(self, msg: Bool) -> None:
+        self._markers_enabled = msg.data
+        self.get_logger().info(f'Marker publishing {"enabled" if msg.data else "disabled"}.')
+
     def _publish_markers(self) -> None:
+        if not self._markers_enabled:
+            return
         arr = MarkerArray()
         for track in self.tracker.tracks:
             colour = track.get('colour', 'unknown')

@@ -12,6 +12,7 @@ fire while the mission thread blocks.
 """
 
 import math
+import subprocess
 import threading
 import time
 
@@ -19,7 +20,7 @@ from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion
 from geometry_msgs.msg import PointStamped
 from nav2_msgs.action import NavigateToPose, Spin
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import ColorRGBA, String
+from std_msgs.msg import Bool, ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 import rclpy
@@ -30,7 +31,7 @@ from rclpy.node import Node
 from rclpy.qos import (
     QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
 )
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 
@@ -190,6 +191,9 @@ class ControllerNode(Node):
             MarkerArray, '/explore_face_markers', 10)
         # TurtleBot4 onboard TTS listens on /speak
         self._speak_pub = self.create_publisher(String, '/speak', 10)
+        # Latched — detectors receive current state even if they start late
+        self._markers_enabled_pub = self.create_publisher(Bool, '/markers_enabled', amcl_qos)
+        self._set_markers_enabled(True)
 
         # Global costmap reader — used to pick free approach poses
         self._costmap = CostmapChecker(self)
@@ -283,10 +287,20 @@ class ControllerNode(Node):
         self._wait_for_nav2()
         self.get_logger().info('Nav2 is up. Starting exploration.')
 
-        self._explore()
+        # self._explore()
+        self._set_markers_enabled(False)
 
         self.get_logger().info('Exploration done. Visiting detected faces.')
-        self._visit_faces()
+        # self._visit_faces()
+
+
+        self.get_logger().info('Starting anomaly inspection phase.')
+        proc = subprocess.Popen([
+            'ros2', 'run', 'upsilon', 'anomaly_controller',
+            '--ros-args', '-p', 'checkpoint_set:=red',
+        ])
+        proc.wait()
+        self.get_logger().info('Anomaly inspection done.')
 
         self.get_logger().info('Face visits done. Navigating to blue-line start.')
         last_wp = EXPLORATION_WAYPOINTS[-1]
@@ -494,6 +508,15 @@ class ControllerNode(Node):
                 f'{len(visited_faces)}/{NUM_FACES_TO_VISIT} faces, '
                 f'{len(visited_rings)}/{NUM_RINGS_TO_VISIT} rings')
             self._approach_and_announce(target.x, target.y, label, phrase)
+
+    # ------------------------------------------------------------------
+    # Marker enable/disable
+    # ------------------------------------------------------------------
+    def _set_markers_enabled(self, enabled: bool) -> None:
+        msg = Bool()
+        msg.data = enabled
+        self._markers_enabled_pub.publish(msg)
+        self.get_logger().info(f'Detector markers {"enabled" if enabled else "disabled"}.')
 
     # ------------------------------------------------------------------
     # Speech (TurtleBot4 onboard TTS listens on /speak)

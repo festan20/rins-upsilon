@@ -95,9 +95,9 @@ class TileDetectionNode(Node):
         roi = frame[:crop_h, :]
 
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Large blur averages out fine wall stripe texture so the tile stays as a bright blob
+        blurred = cv2.GaussianBlur(gray, (31, 31), 0)
 
-        # Otsu finds the threshold automatically between dark wall and bright tile
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
@@ -107,18 +107,54 @@ class TileDetectionNode(Node):
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         min_area = w * crop_h * self.min_area_frac
+        max_area = w * crop_h * 0.85
         best, best_area = None, 0
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < min_area:
+            if area < min_area or area > max_area:
                 continue
+
             peri = cv2.arcLength(cnt, True)
             approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-            if len(approx) == 4 and area > best_area:
+            if len(approx) != 4:
+                continue
+
+            if not cv2.isContourConvex(approx):
+                continue
+
+            # Wall contours usually extend to the image border
+            x, y, bw, bh = cv2.boundingRect(approx)
+            if x <= 2 or y <= 2 or (x + bw) >= (w - 2) or (y + bh) >= (crop_h - 2):
+                continue
+
+            if not self._is_square_enough(approx):
+                continue
+
+            if area > best_area:
                 best, best_area = approx, area
 
         return best
+
+    def _is_square_enough(self, approx: np.ndarray) -> bool:
+        pts = approx.reshape(4, 2).astype(np.float32)
+
+        for i in range(4):
+            p0 = pts[(i - 1) % 4]
+            p1 = pts[i]
+            p2 = pts[(i + 1) % 4]
+            v1 = p0 - p1
+            v2 = p2 - p1
+            cos_a = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
+            angle = np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0)))
+            if abs(angle - 90) > 35:
+                return False
+
+        side_lengths = [np.linalg.norm(pts[(i + 1) % 4] - pts[i]) for i in range(4)]
+        if max(side_lengths) == 0 or min(side_lengths) / max(side_lengths) < 0.25:
+            return False
+
+        return True
 
     def _order_corners(self, pts: np.ndarray) -> np.ndarray:
         """Return corners ordered: top-left, top-right, bottom-right, bottom-left."""

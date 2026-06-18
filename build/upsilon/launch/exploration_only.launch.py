@@ -1,1 +1,0 @@
-/home/upsilon/colcon_ws/rins-upsilon/upsilon/launch/exploration_only.launch.py

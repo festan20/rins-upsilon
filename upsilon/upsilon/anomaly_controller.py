@@ -52,17 +52,20 @@ ARM_SETTLE_S       = 4.0    # wait for the arm to finish moving (3s trajectory)
 # (cf. look_at_belt_left / look_at_belt_right in arm_mover_actions.py).
 # The wrist joint tilts the camera pitch: lower value → looks more UPWARD
 # (toward the 'up' pose [0,0,0,0]); raise it back toward 2.0 to look down.
-ARM_LEFT_COMMAND = 'manual:[1.57, 0.6, 0.5, 1.7]'
+ARM_LEFT_COMMAND = 'manual:[1.57, 0.6, 0.5, 1.6]'
 
 # Checkpoints to visit, [x, y, yaw_rad] in the map frame.
 # TODO: fill in the real positions for each team's side.
+RED_FIRST_CHECKPOINT = (0.26, -4.0, -math.pi / 2)
+
 RED_CHECKPOINTS: list[tuple[float, float, float]] = [
     # (x, y, yaw) — yaw = -pi/2 (90° to the right) while inspecting each tile.
-    (0.249043807387352,  -4.6911163330078125, -math.pi),
-    (-0.2910171151161194, -4.659816265106201, -math.pi),
-    (-0.8702130913734436, -4.667640686035156, -math.pi),
-    (-1.4024468660354614, -4.722416877746582, -math.pi),
+    (0.26,  -4.6, -math.pi),
+    (-0.2910171151161194, -4.6, -math.pi),
+    (-0.8702130913734436, -4.6, -math.pi),
+    (-1.4024468660354614, -4.6, -math.pi),
 ]
+
 
 GREEN_CHECKPOINTS: list[tuple[float, float, float]] = [
     # (x, y, yaw) — yaw = pi/2 (zahod / west) while inspecting each tile.
@@ -133,7 +136,15 @@ class AnomalyControllerNode(Node):
                 'RED_CHECKPOINTS / GREEN_CHECKPOINTS in anomaly_controller.py.')
             return
 
-        # Step 2 — visit every checkpoint
+        # Step 2a — for red, navigate to the staging waypoint first (no detection)
+        if self._set_name == 'red':
+            fx, fy, fyaw = RED_FIRST_CHECKPOINT
+            self.get_logger().info(
+                f'Red staging waypoint → ({fx:.2f}, {fy:.2f}), no detection.')
+            if not self._navigate_to(fx, fy, fyaw):
+                self.get_logger().warn('Staging waypoint unreachable; continuing anyway.')
+
+        # Step 2b — visit every checkpoint
         self.get_logger().info(
             f'Visiting {len(checkpoints)} {self._set_name} checkpoints.')
         for i, (x, y, yaw) in enumerate(checkpoints):

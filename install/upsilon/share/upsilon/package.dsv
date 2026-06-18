@@ -1,9 +1,0 @@
-source;share/upsilon/hook/pythonpath.ps1
-source;share/upsilon/hook/pythonpath.dsv
-source;share/upsilon/hook/pythonpath.sh
-source;share/upsilon/hook/ament_prefix_path.ps1
-source;share/upsilon/hook/ament_prefix_path.dsv
-source;share/upsilon/hook/ament_prefix_path.sh
-source;../../build/upsilon/share/upsilon/hook/pythonpath_develop.ps1
-source;../../build/upsilon/share/upsilon/hook/pythonpath_develop.dsv
-source;../../build/upsilon/share/upsilon/hook/pythonpath_develop.sh
