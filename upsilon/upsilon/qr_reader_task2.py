@@ -1,12 +1,18 @@
 """QR reader node (Task 2).
 
-Reads QR codes from camera images and publishes decoded instruction text.
+Reads QR codes from camera images and publishes decoded instruction text and
+classified task type.
 
 Published topics
 ----------------
 /qr_instructions_task2   (std_msgs/String) - newly discovered instruction texts
+/qr_task_type            (std_msgs/String) - classified task name, one of:
+                           'ring_detection', 'barrel_inspection',
+                           'anomaly_detection'  (visitor/unknown → nothing published)
 /qr_reader_task2/debug   (sensor_msgs/Image) - annotated BGR frame
 """
+
+import re
 
 import rclpy
 from rclpy.node import Node
@@ -17,6 +23,43 @@ import cv2
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge, CvBridgeError
+
+
+# ---------------------------------------------------------------------------
+# Keyword sets — matched as whole words, case-insensitive.
+# ---------------------------------------------------------------------------
+_RING_KW        = {'ring', 'rings'}
+_BARREL_KW      = {'barrel', 'barrels', 'inspect'}
+_ANOMALY_KW     = {'tile', 'tiles', 'anomaly', 'anomalys', 'defect', 'defects'}
+_ANOMALY_GREEN  = {'green', 'greens'}
+_ANOMALY_RED    = {'red', 'reds'}
+_VISITOR_KW     = {'visitor', 'visit'}
+
+
+def _words(text: str) -> set[str]:
+    """Return the set of lower-case word tokens in *text*."""
+    return set(re.findall(r'\b[a-z]+\b', text.lower()))
+
+
+def classify_qr_text(text: str) -> str | None:
+    """Return a task-type string for *text*, or None if nothing should be done.
+
+    Priority: ring > barrel > anomaly > visitor/unknown.
+    Visitor and unrecognised content both return None (no action).
+    Anomaly detection is further split by color keyword (green/red).
+    """
+    words = _words(text)
+    if words & _RING_KW:
+        return 'ring_detection'
+    if words & _BARREL_KW:
+        return 'barrel_inspection'
+    if words & _ANOMALY_KW:
+        if words & _ANOMALY_GREEN:
+            return 'green_anomaly_detection'
+        if words & _ANOMALY_RED:
+            return 'red_anomaly_detection'
+    # visitor or unrecognised — return nothing
+    return None
 
 
 class QrReaderTask2Node(Node):
@@ -41,6 +84,7 @@ class QrReaderTask2Node(Node):
 
         self.create_subscription(Image, self.rgb_topic, self._rgb_cb, qos_profile_sensor_data)
         self._instruction_pub = self.create_publisher(String, '/qr_instructions_task2', 10)
+        self._task_type_pub = self.create_publisher(String, '/qr_task_type', 10)
         self._debug_pub = self.create_publisher(Image, '/qr_reader_task2/debug', 10)
 
         self.get_logger().info(f'QR reader (Task 2) ready on {self.rgb_topic}.')
@@ -92,7 +136,16 @@ class QrReaderTask2Node(Node):
                     self._instruction_pub.publish(String(data=text))
                     if is_new:
                         self._seen_texts.add(text)
-                        self.get_logger().info(f'New QR instruction: {text}')
+                        task = classify_qr_text(text)
+                        if task is not None:
+                            self._task_type_pub.publish(String(data=task))
+                            self.get_logger().info(
+                                f'New QR instruction: {text!r} → task: {task}'
+                            )
+                        else:
+                            self.get_logger().info(
+                                f'New QR instruction: {text!r} → visitor/unknown, no task'
+                            )
 
         if not found_any:
             cv2.putText(
