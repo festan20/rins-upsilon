@@ -65,15 +65,16 @@ RED_CHECKPOINTS: list[tuple[float, float, float]] = [
     (-0.8702130913734436, -4.6, -math.pi),
     (-1.4024468660354614, -4.6, -math.pi),
 ]
+GREEN_FIRST_CHECKPOINT = (-4.009653091430664, -2.5365700721740723, -math.pi)
 
 
 GREEN_CHECKPOINTS: list[tuple[float, float, float]] = [
     # (x, y, yaw) — yaw = pi/2 (zahod / west) while inspecting each tile.
     (-4.643223762512207, -2.5365700721740723, math.pi / 2),
-    (-4.64479398727417,  -1.973413348197937,  math.pi / 2),
-    (-4.686208248138428, -1.2324994802474976, math.pi / 2),
-    (-4.792420864105225, -0.533107340335846,  math.pi / 2),
-    (-4.832175254821777,  0.19783915579319,   math.pi / 2),
+    (-4.643223762512207,  -1.8,  math.pi / 2),
+    (-4.643223762512207, -1.2324994802474976, math.pi / 2),
+    (-4.643223762512207, -0.533107340335846,  math.pi / 2),
+    (-4.643223762512207,  0.19783915579319,   math.pi / 2),
 ]
 
 
@@ -136,11 +137,17 @@ class AnomalyControllerNode(Node):
                 'RED_CHECKPOINTS / GREEN_CHECKPOINTS in anomaly_controller.py.')
             return
 
-        # Step 2a — for red, navigate to the staging waypoint first (no detection)
+        # Step 2a — navigate to the staging waypoint first (no detection)
         if self._set_name == 'red':
             fx, fy, fyaw = RED_FIRST_CHECKPOINT
             self.get_logger().info(
                 f'Red staging waypoint → ({fx:.2f}, {fy:.2f}), no detection.')
+            if not self._navigate_to(fx, fy, fyaw):
+                self.get_logger().warn('Staging waypoint unreachable; continuing anyway.')
+        elif self._set_name == 'green':
+            fx, fy, fyaw = GREEN_FIRST_CHECKPOINT
+            self.get_logger().info(
+                f'Green staging waypoint → ({fx:.2f}, {fy:.2f}), no detection.')
             if not self._navigate_to(fx, fy, fyaw):
                 self.get_logger().warn('Staging waypoint unreachable; continuing anyway.')
 

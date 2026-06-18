@@ -297,7 +297,7 @@ class ControllerNode(Node):
         self.get_logger().info('Starting anomaly inspection phase.')
         proc = subprocess.Popen([
             'ros2', 'run', 'upsilon', 'anomaly_controller',
-            '--ros-args', '-p', 'checkpoint_set:=red',
+            '--ros-args', '-p', 'checkpoint_set:=green',
         ])
         proc.wait()
         self.get_logger().info('Anomaly inspection done.')
