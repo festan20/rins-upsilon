@@ -287,11 +287,11 @@ class ControllerNode(Node):
         self._wait_for_nav2()
         self.get_logger().info('Nav2 is up. Starting exploration.')
 
-        # self._explore()
+        self._explore()
         self._set_markers_enabled(False)
 
         self.get_logger().info('Exploration done. Visiting detected faces.')
-        # self._visit_faces()
+        self._visit_faces()
 
 
         self.get_logger().info('Starting anomaly inspection phase.')
