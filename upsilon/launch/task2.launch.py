@@ -151,7 +151,7 @@ def generate_launch_description():
         launch_arguments=[
             ('namespace', LaunchConfiguration('namespace')),
             ('use_sim_time', LaunchConfiguration('use_sim_time')),
-            ('map', PathJoinSubstitution([pkg_dis_tutorial3, 'maps', 'test.yaml'])),
+            ('map', PathJoinSubstitution([pkg_upsilon, 'map', 'maps', 'test.yaml'])),
             ('params', PathJoinSubstitution([pkg_upsilon, 'config', 'localization.yaml'])),
         ],
     )
