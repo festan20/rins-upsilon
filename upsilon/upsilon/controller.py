@@ -54,13 +54,12 @@ FACE_RECOVERY_WP: tuple[float, float, float] | None = (-0.46, -3.88, 0.0)
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #Task2
-    (0.3, -0.3, 1.6),
-    (0.823, -1.47, 0.0),
-    (-0.46, -3.88, 0.0),
-    (0.05, -3.88, -3.6),
-    (-2.98, -2.848, 0.0),
-    (-4.13, -0.924, 0.0),
-    (-2.53, 0.0924, 0.0),
+    (0.5, 0.2, 3.14),
+    (0.5, -4.3, 0.0),
+    (-1.14, -2.01, 3.14 ),
+    (-2.98, -2.848, -1.57),
+    (-4.29, -0.04, 0.0),
+    (-2.15, 0.3284, 1.57),
     (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
     
@@ -213,6 +212,12 @@ class ControllerNode(Node):
                                  self._face_cb, 10, callback_group=self._cbg)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose',
                                  self._amcl_cb, amcl_qos, callback_group=self._cbg)
+        self.create_subscription(String, '/qr_task_type',
+                                 self._qr_task_cb, 10, callback_group=self._cbg)
+
+        # Latest QR task received (set by _qr_task_cb, cleared before each face visit)
+        self._qr_task: str | None = None
+        self._qr_task_event = threading.Event()
 
         # Robot pose
         self._current_pose_x = 0.0
@@ -258,6 +263,11 @@ class ControllerNode(Node):
             self.get_logger().info(
                 f'Localization recovered: cov={self._loc_cov:.3f} m²')
 
+    def _qr_task_cb(self, msg: String) -> None:
+        self._qr_task = msg.data
+        self._qr_task_event.set()
+        self.get_logger().info(f'QR task received: {msg.data}')
+
     def _ring_cb(self, msg: PointStamped) -> None:
         x, y = msg.point.x, msg.point.y
         # frame_id format: map/<colour>/<track_id>/<count>
@@ -281,10 +291,13 @@ class ControllerNode(Node):
 
     def _face_cb(self, msg: PointStamped) -> None:
         x, y = msg.point.x, msg.point.y
-        # frame_id format: map/<track_id>/<count>
+        # frame_id format: map/<track_id>/<count>/<cam_x>/<cam_y>
         parts = msg.header.frame_id.split('/')
         track_id = int(parts[1]) if len(parts) >= 2 else -1
         count = int(parts[2]) if len(parts) >= 3 else 1
+        # Camera map-frame position encoded by face detector (more accurate than robot base)
+        msg_cam_x = float(parts[3]) if len(parts) >= 4 else self._current_pose_x
+        msg_cam_y = float(parts[4]) if len(parts) >= 5 else self._current_pose_y
 
         # Preserve discovery order and first-detection origin for known tracks
         if track_id in self._faces:
@@ -294,8 +307,8 @@ class ControllerNode(Node):
         else:
             seen_order = self._discovery_counter
             self._discovery_counter += 1
-            seen_from_x = self._current_pose_x
-            seen_from_y = self._current_pose_y
+            seen_from_x = msg_cam_x
+            seen_from_y = msg_cam_y
 
         self._faces[track_id] = Face(x, y, track_id, count, seen_order, seen_from_x, seen_from_y)
         self.get_logger().info(
@@ -371,9 +384,13 @@ class ControllerNode(Node):
         for face in faces:
             self.get_logger().info(
                 f'Visiting face #{face.track_id} at ({face.x:.2f}, {face.y:.2f})')
-            self._approach_and_announce(
+            qr_task = self._approach_and_announce(
                 face.x, face.y, f'face #{face.track_id}', 'Hello',
                 hint_x=face.seen_from_x, hint_y=face.seen_from_y)
+            if qr_task:
+                self.get_logger().info(f'Face #{face.track_id} → task: {qr_task}')
+            else:
+                self.get_logger().warn(f'Face #{face.track_id} → no QR task detected')
         self.get_logger().info(f'Visited {len(faces)} face(s).')
 
     def _activate_blue_line_following(self) -> bool:
@@ -420,52 +437,61 @@ class ControllerNode(Node):
                             ) -> tuple[float, float, float]:
         """Pick an approach pose near APPROACH_DISTANCE from the target, facing it.
 
-        If hint_x/hint_y are given (robot position at detection time), the
-        sample centre is shifted _FACE_SHIFT metres toward the hint so it lands
-        in free space.  Approach candidates are then sampled at
-        (APPROACH_DISTANCE - _FACE_SHIFT) from the shifted centre, keeping the
-        final stopping distance from the actual target the same.
-
-        Scores all candidates by costmap cost and picks the one with the most
-        clearance. Falls back to the robot-relative direction if none are free.
+        If hint_x/hint_y are given, first tries candidates within ±45° of the
+        hint direction (perpendicular to the wall). Falls back to the full circle
+        if none are free in that window.
         """
-        # Optionally shift sample centre toward the detection origin.
+        # Compute preferred (perpendicular) approach angle from hint.
         if hint_x is not None and hint_y is not None:
             dx = hint_x - target_x
             dy = hint_y - target_y
             d = math.sqrt(dx * dx + dy * dy)
             if d > 0.1:
+                preferred_angle = math.atan2(dy, dx)
                 sample_x = target_x + self._FACE_SHIFT * dx / d
                 sample_y = target_y + self._FACE_SHIFT * dy / d
                 sample_dist = max(APPROACH_DISTANCE - self._FACE_SHIFT, 0.3)
             else:
+                preferred_angle = None
                 sample_x, sample_y = target_x, target_y
                 sample_dist = APPROACH_DISTANCE
         else:
+            preferred_angle = None
             sample_x, sample_y = target_x, target_y
             sample_dist = APPROACH_DISTANCE
 
         step = 2.0 * math.pi / APPROACH_CANDIDATES
-        angles = [i * step for i in range(APPROACH_CANDIDATES)]
+        all_angles = [i * step for i in range(APPROACH_CANDIDATES)]
 
-        best_pose = None
-        best_cost = 255  # lethal sentinel
+        def _angle_diff(a: float, b: float) -> float:
+            d = (a - b + math.pi) % (2 * math.pi) - math.pi
+            return abs(d)
 
-        for angle in angles:
-            ax = sample_x + sample_dist * math.cos(angle)
-            ay = sample_y + sample_dist * math.sin(angle)
-            cost = self._costmap.cost_at(ax, ay)
-            if cost < 50 and cost < best_cost:
-                best_cost = cost
-                # yaw always faces the original (unshifted) target
-                best_pose = (ax, ay, math.atan2(target_y - ay, target_x - ax))
+        # First pass: candidates within ±45° of the preferred (perpendicular) angle.
+        # Second pass: all candidates (fallback).
+        window = math.radians(20)
+        passes = (
+            [a for a in all_angles if preferred_angle is not None
+             and _angle_diff(a, preferred_angle) <= window],
+            all_angles,
+        ) if preferred_angle is not None else (all_angles,)
 
-        if best_pose is not None:
-            ax, ay, yaw = best_pose
-            self.get_logger().info(
-                f'Approach pose at ({ax:.2f}, {ay:.2f}) cost={best_cost} '
-                f'yaw={math.degrees(yaw):+.0f}°')
-            return best_pose
+        for candidate_angles in passes:
+            best_pose = None
+            best_cost = 255
+            for angle in candidate_angles:
+                ax = sample_x + sample_dist * math.cos(angle)
+                ay = sample_y + sample_dist * math.sin(angle)
+                cost = self._costmap.cost_at(ax, ay)
+                if cost < 50 and cost < best_cost:
+                    best_cost = cost
+                    best_pose = (ax, ay, math.atan2(target_y - ay, target_x - ax))
+            if best_pose is not None:
+                ax, ay, yaw = best_pose
+                self.get_logger().info(
+                    f'Approach pose at ({ax:.2f}, {ay:.2f}) cost={best_cost} '
+                    f'yaw={math.degrees(yaw):+.0f}°')
+                return best_pose
 
         # Every candidate blocked — fall back to robot-relative direction
         self.get_logger().warn(
@@ -479,14 +505,26 @@ class ControllerNode(Node):
 
     def _approach_and_announce(self, x: float, y: float, label: str, sound: str,
                                hint_x: float | None = None,
-                               hint_y: float | None = None) -> None:
-        """Navigate to APPROACH_DISTANCE from (x, y), face it, speak, and pause."""
+                               hint_y: float | None = None) -> str | None:
+        """Navigate to APPROACH_DISTANCE from (x, y), face it, speak, and pause.
+
+        After arriving, turns left 10° at a time until a QR task is detected
+        (or 12 turns = 120° max). Returns the detected QR task string or None.
+        """
         ax, ay, yaw = self._find_approach_pose(x, y, hint_x, hint_y)
         self._navigate_to(ax, ay, yaw)
-        self.get_logger().info(
-            f'Arrived at {label}. Announcing for {LOOK_DURATION_S}s...')
+        self.get_logger().info(f'Arrived at {label}. Turning left 15° then scanning for QR...')
+
+        # Clear previous QR state, turn left 15°, wait for QR once
+        self._qr_task = None
+        self._qr_task_event.clear()
+        self._navigate_to(ax, ay, yaw + math.radians(15))
+        self._qr_task_event.wait(timeout=3.0)
+
+        qr_task = self._qr_task
         self._say(sound)
         time.sleep(LOOK_DURATION_S)
+        return qr_task
 
     def _visit_targets(self) -> None:
         """Visit NUM_FACES_TO_VISIT faces and NUM_RINGS_TO_VISIT rings.
@@ -719,7 +757,7 @@ class ControllerNode(Node):
             m.pose.position.z = 0.5
             m.pose.orientation.w = 1.0
             m.scale.x = m.scale.y = m.scale.z = 0.3
-            m.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
             arr.markers.append(m)
         self._face_markers_pub.publish(arr)
 

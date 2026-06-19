@@ -184,6 +184,32 @@ class FaceDetectorTask2Node(Node):
 
             d = np.median(valid, axis=0)
 
+            # --- Wall normal via PCA on the depth patch ---
+            # Use a larger patch for plane fitting
+            patch_r_pca = 20
+            v_lo2 = max(0, cy - patch_r_pca)
+            v_hi2 = min(height, cy + patch_r_pca + 1)
+            u_lo2 = max(0, cx - patch_r_pca)
+            u_hi2 = min(width, cx + patch_r_pca + 1)
+            pca_patch = a[v_lo2:v_hi2, u_lo2:u_hi2, :].reshape(-1, 3)
+            pca_valid = pca_patch[
+                np.isfinite(pca_patch[:, 0]) &
+                np.isfinite(pca_patch[:, 1]) &
+                np.isfinite(pca_patch[:, 2]) &
+                (pca_patch[:, 2] > 0)
+            ]
+
+            normal_cam = None
+            if len(pca_valid) >= 6:
+                centroid = pca_valid.mean(axis=0)
+                centered = pca_valid - centroid
+                _, _, Vt = np.linalg.svd(centered, full_matrices=False)
+                # Smallest singular value → plane normal in camera frame
+                normal_cam = Vt[-1]
+                # Ensure normal points toward camera (camera is at origin)
+                if np.dot(normal_cam, -centroid) < 0:
+                    normal_cam = -normal_cam
+
             # Build PointStamped in camera frame
             pt = PointStamped()
             pt.header.frame_id = msg.header.frame_id
@@ -202,16 +228,47 @@ class FaceDetectorTask2Node(Node):
             my = map_pt.point.y
             mz = map_pt.point.z
 
-            # Deduplicate
+            # Compute approach hint: point 1 m along wall normal from face, in map frame
+            if normal_cam is not None:
+                normal_pt = PointStamped()
+                normal_pt.header.frame_id = msg.header.frame_id
+                normal_pt.header.stamp = msg.header.stamp
+                normal_pt.point.x = float(d[0]) + float(normal_cam[0])
+                normal_pt.point.y = float(d[1]) + float(normal_cam[1])
+                normal_pt.point.z = float(d[2]) + float(normal_cam[2])
+                normal_map = self.tf2.transform_point(normal_pt, 'map')
+                if normal_map is not None:
+                    cam_x = normal_map.point.x
+                    cam_y = normal_map.point.y
+                else:
+                    normal_cam = None  # fall through to camera-origin fallback
+
+            if normal_cam is None:
+                # Fallback: use camera origin in map frame
+                cam_origin = PointStamped()
+                cam_origin.header.frame_id = msg.header.frame_id
+                cam_origin.header.stamp = msg.header.stamp
+                cam_origin.point.x = 0.0
+                cam_origin.point.y = 0.0
+                cam_origin.point.z = 0.0
+                cam_map = self.tf2.transform_point(cam_origin, 'map')
+                cam_x = cam_map.point.x if cam_map is not None else mx
+                cam_y = cam_map.point.y if cam_map is not None else my
+
+            # Deduplicate — tracker maintains running-average position
             track_id, is_new = self.tracker.update(mx, my)
             count = self.tracker.get_count(track_id)
 
-            # Publish on every detection: frame_id = map/<track_id>/<count>
+            # Use the tracker's averaged position (more accurate than single detection)
+            avg_pos = self.tracker.get_position(track_id)
+            pub_x, pub_y = avg_pos if avg_pos is not None else (mx, my)
+
+            # Publish: frame_id = map/<track_id>/<count>/<cam_x>/<cam_y>
             det = PointStamped()
-            det.header.frame_id = f'map/{track_id}/{count}'
+            det.header.frame_id = f'map/{track_id}/{count}/{cam_x:.3f}/{cam_y:.3f}'
             det.header.stamp = msg.header.stamp
-            det.point.x = mx
-            det.point.y = my
+            det.point.x = pub_x
+            det.point.y = pub_y
             det.point.z = mz
             self._face_pub.publish(det)
 

@@ -359,7 +359,7 @@ def generate_launch_description():
     ld.add_action(top_camera_init_pose)
     ld.add_action(face_detector)
     ld.add_action(speech)
-    #ld.add_action(TimerAction(period=25.0, actions=[controller]))
+    ld.add_action(TimerAction(period=25.0, actions=[controller]))
     # Delay the fast-starting detector nodes so DDS publisher discovery is
     # complete before they subscribe (face_detector has a natural delay from
     # YOLOv8 model loading; these don't).
