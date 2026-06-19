@@ -46,11 +46,16 @@ POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
 APPROACH_CANDIDATES = 24   # how many angles to try around the target
 NUM_FACES_TO_VISIT = 3     # target number of faces to visit
 NUM_RINGS_TO_VISIT = 2     # target number of rings to visit
+# After visiting a face, navigate here before continuing to the next target.
+# Set to None to skip the recovery step.
+FACE_RECOVERY_WP: tuple[float, float, float] | None = (-0.46, -3.88, 0.0)
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #Task2
+    (0.3, -0.3, 1.6),
     (0.823, -1.47, 0.0),
     (-0.46, -3.88, 0.0),
+    (0.05, -3.88, -3.6),
     (-2.98, -2.848, 0.0),
     (-4.13, -0.924, 0.0),
     (-2.53, 0.0924, 0.0),

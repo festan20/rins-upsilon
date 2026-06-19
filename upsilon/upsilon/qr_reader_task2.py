@@ -131,6 +131,18 @@ class QrReaderTask2Node(Node):
                     2,
                 )
 
+                task_label = classify_qr_text(text) or 'visitor/unknown (no task)'
+                task_anchor = (anchor[0], anchor[1] + 20)
+                cv2.putText(
+                    debug,
+                    f'Task: {task_label}',
+                    task_anchor,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 200, 255),
+                    2,
+                )
+
                 is_new = text not in self._seen_texts
                 if is_new or self.publish_duplicates:
                     self._instruction_pub.publish(String(data=text))

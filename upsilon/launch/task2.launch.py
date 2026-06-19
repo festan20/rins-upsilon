@@ -25,9 +25,9 @@ from launch_ros.actions import Node
 ARGUMENTS = [
     DeclareLaunchArgument(
         'world',
-        default_value='task2',
+        default_value='task2_delay',
         description='Gazebo world name (without .sdf). '
-                    'Options: task2_blue_demo, task2_green_demo, task2_yellow_demo',
+                    'Options: task2_delay, task2_blue_demo, task2_green_demo, task2_yellow_demo',
     ),
     DeclareLaunchArgument(
         'model',
@@ -151,7 +151,7 @@ def generate_launch_description():
         launch_arguments=[
             ('namespace', LaunchConfiguration('namespace')),
             ('use_sim_time', LaunchConfiguration('use_sim_time')),
-            ('map', PathJoinSubstitution([pkg_dis_tutorial3, 'maps', 'factory.yaml'])),
+            ('map', PathJoinSubstitution([pkg_dis_tutorial3, 'maps', 'test.yaml'])),
             ('params', PathJoinSubstitution([pkg_upsilon, 'config', 'localization.yaml'])),
         ],
     )
@@ -164,7 +164,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'use_sim_time': LaunchConfiguration('use_sim_time')},
-            {'yaml_filename': PathJoinSubstitution([pkg_upsilon, 'config', 'keepout_mask.yaml'])},
+            {'yaml_filename': PathJoinSubstitution([pkg_upsilon, 'config', 'keepout_mask2.yaml'])},
             {'topic_name': '/keepout_filter_mask'},
             {'frame_id': 'map'},
         ],
