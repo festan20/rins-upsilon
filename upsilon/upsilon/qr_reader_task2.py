@@ -98,9 +98,12 @@ class QrReaderTask2Node(Node):
 
         debug = frame.copy()
 
+        # Upscale for better detection of complex/dense QR codes
+        detect_frame = cv2.resize(frame, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+
         found_any = False
         try:
-            ok, decoded_texts, points, _ = self.qr_detector.detectAndDecodeMulti(frame)
+            ok, decoded_texts, points, _ = self.qr_detector.detectAndDecodeMulti(detect_frame)
         except Exception as e:
             self.get_logger().error(f'QR decode failed: {e}', throttle_duration_sec=2.0)
             ok, decoded_texts, points = False, (), None
@@ -113,9 +116,9 @@ class QrReaderTask2Node(Node):
 
                 found_any = True
 
-                # Draw QR polygon when available.
+                # Draw QR polygon when available (scale back from 3x upscale).
                 if points is not None and i < len(points):
-                    poly = points[i].astype(int)
+                    poly = (points[i] / 3).astype(int)
                     cv2.polylines(debug, [poly], True, (0, 255, 0), 2)
                     anchor = tuple(poly[0])
                 else:
