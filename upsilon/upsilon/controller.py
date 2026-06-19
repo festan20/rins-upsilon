@@ -194,6 +194,7 @@ class ControllerNode(Node):
         # Latched — detectors receive current state even if they start late
         self._markers_enabled_pub = self.create_publisher(Bool, '/markers_enabled', amcl_qos)
         self._set_markers_enabled(True)
+        self._report_pub = self.create_publisher(Bool, '/generate_report', 10)
 
         # Global costmap reader — used to pick free approach poses
         self._costmap = CostmapChecker(self)
@@ -301,6 +302,9 @@ class ControllerNode(Node):
         ])
         proc.wait()
         self.get_logger().info('Anomaly inspection done.')
+
+        self.get_logger().info('Generating detection report.')
+        self._report_pub.publish(Bool(data=True))
 
         self.get_logger().info('Face visits done. Navigating to blue-line start.')
         last_wp = EXPLORATION_WAYPOINTS[-1]

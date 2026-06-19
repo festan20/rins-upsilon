@@ -43,6 +43,7 @@ setup(
             'wasd_teleop = upsilon.wasd_teleop:main',
             'tile_detection = upsilon.tile_detection:main',
             'anomaly_detector = upsilon.anomaly_detector:main',
+            'report = upsilon.report:main',
         ],
     },
 )

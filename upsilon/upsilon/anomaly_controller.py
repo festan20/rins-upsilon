@@ -172,6 +172,11 @@ class AnomalyControllerNode(Node):
         # Step 3 — summary
         self._print_summary()
 
+        # Mission complete — shut down the ROS context so the process exits
+        # and proc.wait() in the caller returns.
+        time.sleep(0.5)  # let the last log lines flush
+        rclpy.shutdown()
+
     def _inspect_tile(self) -> tuple[bool | None, str]:
         """Trigger tile detection then anomaly detection at the current pose."""
         tile_ok, tile_msg = self._call_trigger(self._tile_client, 'detect_tile')

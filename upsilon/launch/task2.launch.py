@@ -363,6 +363,14 @@ def generate_launch_description():
     # Delay the fast-starting detector nodes so DDS publisher discovery is
     # complete before they subscribe (face_detector has a natural delay from
     # YOLOv8 model loading; these don't).
+    report = Node(
+        package='upsilon',
+        executable='report',
+        name='report',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+
     ld.add_action(TimerAction(period=15.0, actions=[
         tile_detection,
         anomaly_detector,
@@ -372,5 +380,6 @@ def generate_launch_description():
         visualizer,
         blue_line_detector,
         blue_line_follower,
+        report,
     ]))
     return ld

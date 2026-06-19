@@ -66,7 +66,11 @@ class TileDetectionNode(Node):
             return response
 
         frame = self.latest_frame.copy()
-        corners = self._detect_rectangle(frame)
+        corners = self._detect_rectangle(frame, preprocess=True)
+
+        if corners is None:
+            self.get_logger().info('No tile with preprocessing — retrying without blur/morphology.')
+            corners = self._detect_rectangle(frame, preprocess=False)
 
         debug = frame.copy()
         if corners is None:
@@ -89,20 +93,23 @@ class TileDetectionNode(Node):
         response.message = 'Tile detected. Result on /tile_detection/result.'
         return response
 
-    def _detect_rectangle(self, frame) -> np.ndarray | None:
+    def _detect_rectangle(self, frame, preprocess: bool = True) -> np.ndarray | None:
         h, w = frame.shape[:2]
         crop_h = int(h * (1.0 - self.crop_bottom))
         roi = frame[:crop_h, :]
 
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        # Large blur averages out fine wall stripe texture so the tile stays as a bright blob
-        blurred = cv2.GaussianBlur(gray, (31, 31), 0)
 
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if preprocess:
+            # Large blur averages out fine wall stripe texture so the tile stays as a bright blob
+            gray = cv2.GaussianBlur(gray, (31, 31), 0)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        if preprocess:
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
