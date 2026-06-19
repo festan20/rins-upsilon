@@ -8,6 +8,7 @@ OUTPUT_DIR.
 Run with:
     ros2 run upsilon report
 """
+import json
 import os
 import re
 import datetime
@@ -23,7 +24,7 @@ try:
     from reportlab.lib.units import cm
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage,
     )
 except ImportError:
     raise SystemExit(
@@ -199,6 +200,66 @@ def generate_pdf(rings, barrels, output_path: str) -> None:
     else:
         story.append(Paragraph(
             f'No barrels met the threshold (n ≥ {BARREL_THRESHOLD}).', styles['Normal']))
+
+    # -----------------------------------------------------------------------
+    # Anomaly inspection
+    # -----------------------------------------------------------------------
+    story.append(Paragraph('Anomaly Inspection', styles['Heading1']))
+
+    anomaly_json = os.path.join(OUTPUT_DIR, 'anomaly_results.json')
+    if os.path.exists(anomaly_json):
+        with open(anomaly_json) as f:
+            raw = json.load(f)
+        results = [raw[k] for k in sorted(raw, key=lambda x: int(x))]
+
+        n_anomalies = sum(1 for r in results if r.get('anomaly') is True)
+        story.append(Paragraph(
+            f'Tiles inspected: <b>{len(results)}</b> &nbsp;—&nbsp; '
+            f'Anomalies found: <b>{n_anomalies}</b>',
+            styles['Normal'],
+        ))
+        story.append(Spacer(1, 0.25 * cm))
+
+        data = [['Tile', 'Position', 'Result', 'Score']]
+        for r in results:
+            idx  = r.get('index', '?')
+            pos  = f"({r['x']:.2f}, {r['y']:.2f})"
+            anom = r.get('anomaly')
+            if anom is True:
+                result_str = 'ANOMALY'
+            elif anom is False:
+                result_str = 'OK'
+            else:
+                result_str = 'skipped'
+            msg   = r.get('message', '')
+            score = ''
+            import re as _re
+            m = _re.search(r'max score:\s*([\d.]+)', msg)
+            if m:
+                score = m.group(1)
+            data.append([str(idx), pos, result_str, score])
+
+        table = _make_table(data, [2*cm, 5*cm, 3*cm, 3*cm])
+        # Highlight anomaly rows in red
+        for row_i, r in enumerate(results, start=1):
+            if r.get('anomaly') is True:
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, row_i), (-1, row_i), colors.HexColor('#ffcccc')),
+                ]))
+        story.append(table)
+        story.append(Spacer(1, 0.4 * cm))
+
+        for r in results:
+            img_path = r.get('image')
+            if img_path and os.path.exists(img_path):
+                anom = r.get('anomaly')
+                label = 'ANOMALY' if anom is True else ('OK' if anom is False else 'skipped')
+                story.append(Paragraph(
+                    f"Tile {r.get('index', '?')} — {label}", styles['Heading2']))
+                story.append(RLImage(img_path, width=8*cm, height=8*cm))
+                story.append(Spacer(1, 0.3 * cm))
+    else:
+        story.append(Paragraph('No anomaly results found.', styles['Normal']))
 
     doc.build(story)
     print(f'Report saved → {output_path}')

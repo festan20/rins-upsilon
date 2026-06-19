@@ -43,6 +43,8 @@ LOOK_DURATION_S   = 5.0    # seconds to pause looking at a face/ring (also lets 
 NAV_TIMEOUT_S     = 30.0   # give up on a nav goal after this long
 SPIN_TIMEOUT_S    = 20.0   # give up on a spin after this long
 POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
+LOC_COV_THRESHOLD = 0.3    # m² (x-var + y-var) above this → localization considered bad
+LOC_WAIT_TIMEOUT  = 45.0   # s — max time to wait for localization to recover
 APPROACH_CANDIDATES = 24   # how many angles to try around the target
 NUM_FACES_TO_VISIT = 3     # target number of faces to visit
 NUM_RINGS_TO_VISIT = 2     # target number of rings to visit
@@ -216,6 +218,10 @@ class ControllerNode(Node):
         self._current_pose_x = 0.0
         self._current_pose_y = 0.0
 
+        # Localization health (updated by _amcl_cb)
+        self._localization_bad = False
+        self._loc_cov = 0.0  # latest x-var + y-var from AMCL
+
         # Detected rings keyed by track_id (updated with latest position/count)
         self._rings: dict[int, Ring] = {}
         # Detected faces keyed by track_id (updated with latest position/count)
@@ -240,6 +246,17 @@ class ControllerNode(Node):
     def _amcl_cb(self, msg: PoseWithCovarianceStamped) -> None:
         self._current_pose_x = msg.pose.pose.position.x
         self._current_pose_y = msg.pose.pose.position.y
+        cov = msg.pose.covariance
+        self._loc_cov = cov[0] + cov[7]  # x-variance + y-variance
+        was_bad = self._localization_bad
+        self._localization_bad = self._loc_cov > LOC_COV_THRESHOLD
+        if self._localization_bad and not was_bad:
+            self.get_logger().warn(
+                f'Localization degraded: cov={self._loc_cov:.3f} m² '
+                f'(threshold {LOC_COV_THRESHOLD} m²)')
+        elif not self._localization_bad and was_bad:
+            self.get_logger().info(
+                f'Localization recovered: cov={self._loc_cov:.3f} m²')
 
     def _ring_cb(self, msg: PointStamped) -> None:
         x, y = msg.point.x, msg.point.y
@@ -298,6 +315,7 @@ class ControllerNode(Node):
 
         self.get_logger().info('Exploration done. Visiting detected faces.')
         self._visit_faces()
+        self.get_logger().info('Face visits done. Navigating to blue-line start.')
 
 
         self.get_logger().info('Starting anomaly inspection phase.')
@@ -311,9 +329,13 @@ class ControllerNode(Node):
         self.get_logger().info('Generating detection report.')
         self._report_pub.publish(Bool(data=True))
 
-        self.get_logger().info('Face visits done. Navigating to blue-line start.')
         last_wp = EXPLORATION_WAYPOINTS[-1]
         self._navigate_to(*last_wp, timeout=120.0)
+
+        subprocess.run([
+            'ros2', 'topic', 'pub', '--once', '/arm_command',
+            'std_msgs/msg/String', "data: 'manual:[0.0, 0.6, 0.5, 2.0]'",
+        ])
 
         if self._activate_blue_line_following():
             self.get_logger().info('Blue-line follower activated. Mission handoff complete.')
@@ -538,11 +560,34 @@ class ControllerNode(Node):
         self.get_logger().info(f'Speaking: "{phrase}"')
 
     # ------------------------------------------------------------------
+    # Localization recovery
+    # ------------------------------------------------------------------
+    def _relocalize(self) -> None:
+        """Spin in place until AMCL covariance recovers or we time out."""
+        self.get_logger().warn(
+            f'Relocalizing (cov={self._loc_cov:.3f} m²) — spinning to gather scan data...')
+        t0 = time.monotonic()
+        while self._localization_bad:
+            if time.monotonic() - t0 > LOC_WAIT_TIMEOUT:
+                self.get_logger().error(
+                    f'Relocalization timed out after {LOC_WAIT_TIMEOUT:.0f}s '
+                    f'(cov={self._loc_cov:.3f} m²) — proceeding anyway.')
+                break
+            self._spin_360()
+            time.sleep(0.5)
+        if not self._localization_bad:
+            self.get_logger().info(
+                f'Relocalization succeeded (cov={self._loc_cov:.3f} m²).')
+
+    # ------------------------------------------------------------------
     # Blocking navigation
     # ------------------------------------------------------------------
     def _navigate_to(self, x: float, y: float, yaw: float,
                      timeout: float = NAV_TIMEOUT_S) -> bool:
         """Send a nav goal and block until it completes or times out."""
+        if self._localization_bad:
+            self._relocalize()
+
         pose = self._make_pose(x, y, yaw)
 
         if not self._nav_client.wait_for_server(timeout_sec=5.0):
@@ -570,6 +615,12 @@ class ControllerNode(Node):
         result_future = goal_handle.get_result_async()
         while not result_future.done():
             time.sleep(POLL_INTERVAL_S)
+            if self._localization_bad:
+                self.get_logger().warn('Localization degraded mid-nav — cancelling goal to relocalize.')
+                goal_handle.cancel_goal_async()
+                time.sleep(1.0)  # let cancel propagate
+                self._relocalize()
+                return self._navigate_to(x, y, yaw, timeout)
             if time.monotonic() - t0 > timeout:
                 self.get_logger().warn('Nav goal timed out; cancelling.')
                 goal_handle.cancel_goal_async()

@@ -19,12 +19,17 @@ mission thread blocks (same pattern as controller.py).
 ros2 run upsilon anomaly_controller --ros-args -p checkpoint_set:=green
 """
 
+import json
 import math
+import os
 import threading
 import time
 
+import cv2
+from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
+from sensor_msgs.msg import Image as RosImage
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -35,6 +40,10 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
+
+_BASE = os.path.join(os.path.expanduser('~'), 'colcon_ws', 'rins-upsilon', 'upsilon', 'upsilon')
+REPORTS_DIR = os.path.join(_BASE, 'reports')
+IMAGES_DIR  = os.path.join(_BASE, 'image_reports')
 
 
 # --------------------------------------------------------------------------
@@ -103,8 +112,13 @@ class AnomalyControllerNode(Node):
         # Arm command publisher
         self._arm_pub = self.create_publisher(String, '/arm_command', 10)
 
-        # checkpoint index -> dict(x, y, anomaly, message)
+        # checkpoint index -> dict(x, y, anomaly, message, image)
         self._results: dict[int, dict] = {}
+
+        self._bridge = CvBridge()
+        self._latest_debug: cv2.typing.MatLike | None = None
+        self.create_subscription(RosImage, '/anomaly_detection/debug',
+                                 self._debug_cb, 10, callback_group=self._cbg)
 
         # Start mission on a separate thread so callbacks keep firing
         self._mission_thread = threading.Thread(target=self._run_mission, daemon=True)
@@ -165,17 +179,37 @@ class AnomalyControllerNode(Node):
                                     'message': 'navigation failed'}
                 continue
 
+            self._latest_debug = None
             anomaly, message = self._inspect_tile()
-            self._results[i] = {'x': x, 'y': y, 'anomaly': anomaly,
-                                'message': message}
+            time.sleep(1.0)  # let debug image callback fire
 
-        # Step 3 — summary
+            img_path = None
+            if self._latest_debug is not None:
+                os.makedirs(IMAGES_DIR, exist_ok=True)
+                img_path = os.path.join(IMAGES_DIR, f'anomaly_{i + 1}.png')
+                cv2.imwrite(img_path, self._latest_debug)
+
+            self._results[i] = {'index': i + 1, 'x': x, 'y': y,
+                                 'anomaly': anomaly, 'message': message,
+                                 'image': img_path}
+
+        # Step 3 — summary + persist results for the combined report
         self._print_summary()
+        os.makedirs(REPORTS_DIR, exist_ok=True)
+        with open(os.path.join(REPORTS_DIR, 'anomaly_results.json'), 'w') as f:
+            json.dump({str(k): v for k, v in self._results.items()}, f, indent=2)
+        self.get_logger().info(f'Anomaly results saved to {REPORTS_DIR}/anomaly_results.json')
 
         # Mission complete — shut down the ROS context so the process exits
         # and proc.wait() in the caller returns.
         time.sleep(0.5)  # let the last log lines flush
         rclpy.shutdown()
+
+    def _debug_cb(self, msg: RosImage) -> None:
+        try:
+            self._latest_debug = self._bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except CvBridgeError:
+            pass
 
     def _inspect_tile(self) -> tuple[bool | None, str]:
         """Trigger tile detection then anomaly detection at the current pose."""
