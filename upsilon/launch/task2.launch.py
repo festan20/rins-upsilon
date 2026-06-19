@@ -211,20 +211,6 @@ def generate_launch_description():
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
-    top_camera_init_pose = TimerAction(
-        period=20.0,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    'ros2', 'topic', 'pub', '--times', '5', '--rate', '1',
-                    '/arm_command', 'std_msgs/msg/String',
-                    "data: 'manual:[0.0, 0.6, 0.5, 2.0]'",
-                ],
-                output='screen',
-            )
-        ],
-    )
-
     tile_detection = Node(
         package='upsilon',
         executable='tile_detection',
@@ -356,7 +342,6 @@ def generate_launch_description():
     ld.add_action(nav2)
     ld.add_action(arm_control)
     ld.add_action(arm_mover)
-    ld.add_action(top_camera_init_pose)
     ld.add_action(face_detector)
     ld.add_action(speech)
     ld.add_action(TimerAction(period=25.0, actions=[controller]))

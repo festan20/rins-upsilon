@@ -54,6 +54,7 @@ FACE_RECOVERY_WP: tuple[float, float, float] | None = (-0.46, -3.88, 0.0)
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #Task2
+<<<<<<< Updated upstream
     (0.5, 0.2, 3.14),
     (0.5, -4.3, 0.0),
     (-1.14, -2.01, 3.14 ),
@@ -62,6 +63,17 @@ EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     (-2.15, 0.3284, 1.57),
     (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
+=======
+    (0.33709830045700073, -0.19402369856834412, math.radians(75)),
+    (0.3, -0.3, 1.6),
+    (0.823, -1.47, 0.0),
+    (-0.46, -3.88, 0.0),
+    (-2.98, -2.848, -math.pi/2),
+    (-4.13, -0.924, -math.pi/2),
+    (-2.53, 0.0924, 0.0),
+    (-0.5549578666687012, -0.7813922762870789, 0.0),
+    (2.7586843967437744, 0.0148270009085536, 0.0), #blue line
+>>>>>>> Stashed changes
     
     # Real robot waypoints
     #(1.7515618801116943,  2.5002310276031494,  0.0),
@@ -334,7 +346,7 @@ class ControllerNode(Node):
         self.get_logger().info('Starting anomaly inspection phase.')
         proc = subprocess.Popen([
             'ros2', 'run', 'upsilon', 'anomaly_controller',
-            '--ros-args', '-p', 'checkpoint_set:=green',
+            '--ros-args', '-p', 'checkpoint_set:=red',
         ])
         proc.wait()
         self.get_logger().info('Anomaly inspection done.')
@@ -346,8 +358,9 @@ class ControllerNode(Node):
         self._navigate_to(*last_wp, timeout=120.0)
 
         subprocess.run([
-            'ros2', 'topic', 'pub', '--once', '/arm_command',
-            'std_msgs/msg/String', "data: 'manual:[0.0, 0.6, 0.5, 2.0]'",
+            'ros2', 'topic', 'pub', '--times', '5', '--rate', '1',
+            '/arm_command', 'std_msgs/msg/String',
+            "data: 'manual:[0.0, 0.6, 0.5, 2.0]'",
         ])
 
         if self._activate_blue_line_following():
