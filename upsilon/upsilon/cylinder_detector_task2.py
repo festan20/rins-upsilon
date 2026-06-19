@@ -41,6 +41,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Bool, ColorRGBA
 from cv_bridge import CvBridge, CvBridgeError
 
+from nav_msgs.msg import Odometry
 from upsilon.perception_utils import TF2Helper, IncrementalTrackManager, MapBoundsTracker
 
 _LATCHED_QOS = QoSProfile(
@@ -69,6 +70,7 @@ BARREL_RADIUS = 0.11           # m — push the front-surface point back to the 
 BARREL_MIN_HEIGHT_M = 0.004    # map-frame z of blob centroid; floor lines are ~0
 BARREL_MAX_HEIGHT_M = 0.30     # centroid above this = wall feature / not a barrel
 SPILL_MIN_AREA = 50            # min connected px outside barrel rect to call it a spill
+MAX_ANGULAR_VEL = 0.2          # rad/s — skip detection while rotating faster than this
 
 
 COLOUR_BUCKETS = [
@@ -141,10 +143,12 @@ class CylinderDetectorTask2Node(Node):
         self._latest_bgr: np.ndarray | None = None
         self._last_process_time = 0.0
         self._process_interval = 1.0 / 5.0
+        self._angular_vel = 0.0
 
         qos = qos_profile_sensor_data
         self.create_subscription(Image, '/oakd/rgb/preview/image_raw', self._rgb_cb, qos)
         self.create_subscription(PointCloud2, '/oakd/rgb/preview/depth/points', self._cloud_cb, qos)
+        self.create_subscription(Odometry, '/odom', self._odom_cb, qos)
 
         self._cyl_pub = self.create_publisher(PointStamped, '/detected_cylinders_task2', 10)
         self._marker_pub = self.create_publisher(MarkerArray, '/cylinder_markers_task2', 10)
@@ -168,6 +172,9 @@ class CylinderDetectorTask2Node(Node):
             self.get_logger().info('Startup watchdog OK — camera data is flowing.')
 
     # ------------------------------------------------------------------
+    def _odom_cb(self, msg: Odometry) -> None:
+        self._angular_vel = abs(msg.twist.twist.angular.z)
+
     def _rgb_cb(self, msg: Image) -> None:
         try:
             self._latest_bgr = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
@@ -176,6 +183,8 @@ class CylinderDetectorTask2Node(Node):
 
     def _cloud_cb(self, msg: PointCloud2) -> None:
         if self._latest_bgr is None:
+            return
+        if self._angular_vel > MAX_ANGULAR_VEL:
             return
         now = self.get_clock().now().nanoseconds / 1e9
         if now - self._last_process_time < self._process_interval:
@@ -192,24 +201,42 @@ class CylinderDetectorTask2Node(Node):
 
         Pushed back by BARREL_RADIUS along the ray so it lands on the barrel's
         central axis rather than the front surface. None if too few valid points.
+
+        Only the central 40% horizontal strip of the blob is used so curved
+        barrel edges (which are further away) don't bias the position estimate.
+        An IQR depth filter then removes background bleed-through.
         """
         h, w = xyz.shape[:2]
         blob = np.zeros((h, w), dtype=np.uint8)
         cv2.drawContours(blob, [cnt], -1, 255, -1)
         blob = cv2.erode(blob, _OPEN_KERNEL, iterations=1)  # avoid edge bleed
+
+        # Restrict to central 40% of blob width to skip curved barrel edges
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        strip_mask = np.zeros((h, w), dtype=np.uint8)
+        cx = x + bw // 2
+        half = max(1, int(bw * 0.20))
+        strip_mask[:, max(0, cx - half):min(w, cx + half)] = 255
+        blob = cv2.bitwise_and(blob, strip_mask)
+
         pts = xyz[blob == 255]
         if pts.size == 0:
             return None
         pts = pts[np.isfinite(pts).all(axis=1)]
         if len(pts) < MIN_BLOB_POINTS:
             return None
-        # Filter by Euclidean range, not a single axis: the OAK-D cloud is in
-        # body convention (x forward, y left, z up), so a barrel on the floor
-        # has a NEGATIVE z. Range is convention-independent.
+
         rng = np.linalg.norm(pts, axis=1)
         pts = pts[(rng > DEPTH_MIN) & (rng < DEPTH_MAX)]
         if len(pts) < MIN_BLOB_POINTS:
             return None
+
+        # IQR depth filter: reject points more than 0.15 m from median depth
+        med_rng = float(np.median(np.linalg.norm(pts, axis=1)))
+        pts = pts[np.abs(np.linalg.norm(pts, axis=1) - med_rng) < 0.15]
+        if len(pts) < MIN_BLOB_POINTS:
+            return None
+
         med = np.median(pts, axis=0)
         d = float(np.linalg.norm(med))
         if d > 1e-3:

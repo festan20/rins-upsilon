@@ -348,8 +348,9 @@ class IncrementalTrackManager:
     Returns a unique integer ID for each track.
     """
 
-    def __init__(self, merge_distance: float = 0.8):
+    def __init__(self, merge_distance: float = 0.8, confirmed_count: int = 5):
         self.merge_distance = merge_distance
+        self.confirmed_count = confirmed_count
         self._tracks: list[dict] = []  # [{'id': int, 'x': float, 'y': float, 'count': int}]
         self._next_id = 0
 
@@ -359,23 +360,54 @@ class IncrementalTrackManager:
         Returns (track_id, is_new) where is_new=True means first time this
         track has been seen.
         """
+        best_track = None
+        best_dist = float('inf')
         for track in self._tracks:
             dist = math.sqrt((track['x'] - x) ** 2 + (track['y'] - y) ** 2)
-            if dist < self.merge_distance:
-                # Merge: update running average position
-                n = track['count']
-                track['x'] = (track['x'] * n + x) / (n + 1)
-                track['y'] = (track['y'] * n + y) / (n + 1)
-                track['count'] += 1
-                if colour != 'unknown':
-                    track['colour'] = colour
-                return track['id'], False
+            if dist < self.merge_distance and dist < best_dist:
+                best_dist = dist
+                best_track = track
+
+        if best_track is not None:
+            n = best_track['count']
+            best_track['x'] = (best_track['x'] * n + x) / (n + 1)
+            best_track['y'] = (best_track['y'] * n + y) / (n + 1)
+            best_track['count'] += 1
+            if colour != 'unknown':
+                best_track['colour'] = colour
+            self._merge_nearby_tracks()
+            return best_track['id'], False
 
         # New track
         tid = self._next_id
         self._next_id += 1
         self._tracks.append({'id': tid, 'x': x, 'y': y, 'count': 1, 'colour': colour})
+        self._merge_nearby_tracks()
         return tid, True
+
+    def _merge_nearby_tracks(self) -> None:
+        """Merge any pair of existing tracks that are within merge_distance."""
+        merged = True
+        while merged:
+            merged = False
+            for i, a in enumerate(self._tracks):
+                for j, b in enumerate(self._tracks):
+                    if j <= i:
+                        continue
+                    dist = math.sqrt((a['x'] - b['x']) ** 2 + (a['y'] - b['y']) ** 2)
+                    if dist < self.merge_distance:
+                        # Absorb b into a (keep a's id, weighted average position)
+                        na, nb = a['count'], b['count']
+                        a['x'] = (a['x'] * na + b['x'] * nb) / (na + nb)
+                        a['y'] = (a['y'] * na + b['y'] * nb) / (na + nb)
+                        a['count'] = na + nb
+                        if b.get('colour', 'unknown') != 'unknown':
+                            a['colour'] = b['colour']
+                        self._tracks.pop(j)
+                        merged = True
+                        break
+                if merged:
+                    break
 
     def get_position(self, track_id: int) -> tuple[float, float] | None:
         for t in self._tracks:

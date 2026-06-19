@@ -294,6 +294,8 @@ class FaceDetectorTask2Node(Node):
         arr = MarkerArray()
         now = self.get_clock().now().to_msg()
         for track in self.tracker.tracks:
+            if track['count'] < 5:
+                continue
             # Sphere marker
             m = Marker()
             m.header.frame_id = 'map'

@@ -57,7 +57,7 @@ class BlueLineFollowerNode(Node):
                 ('junction_scan_timeout_sec', 4.0),
                 ('junction_forward_sec', 2.0),
                 ('rotate_speed', 0.6),
-                ('rotate_duration_sec', 3.2),
+                ('rotate_duration_sec', 5.3),
                 ('junction_match_dist', 0.45),
                 ('junction_rearm_dist', 0.35),
                 ('face_stop_enabled', True),
@@ -409,7 +409,7 @@ class BlueLineFollowerNode(Node):
         # 180° rotation for dead-end reversal.
         if self._state == 'ROTATING':
             if now < self._rotate_until:
-                self._publish_cmd(0.0, self.rotate_speed)
+                self._publish_cmd(0.0, -self.rotate_speed)
                 return
             self._state = 'FOLLOW'
 

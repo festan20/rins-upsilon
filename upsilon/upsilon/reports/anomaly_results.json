@@ -1,0 +1,34 @@
+{
+  "0": {
+    "index": 1,
+    "x": 0.26,
+    "y": -4.6,
+    "anomaly": true,
+    "message": "ANOMALY DETECTED \u2014 max score: 1.000 (threshold: 0.5)",
+    "image": "/home/upsilon/colcon_ws/rins-upsilon/upsilon/upsilon/image_reports/anomaly_1.png"
+  },
+  "1": {
+    "index": 2,
+    "x": -0.2910171151161194,
+    "y": -4.6,
+    "anomaly": true,
+    "message": "ANOMALY DETECTED \u2014 max score: 1.000 (threshold: 0.5)",
+    "image": "/home/upsilon/colcon_ws/rins-upsilon/upsilon/upsilon/image_reports/anomaly_2.png"
+  },
+  "2": {
+    "index": 3,
+    "x": -0.8702130913734436,
+    "y": -4.6,
+    "anomaly": false,
+    "message": "okay \u2014 max score: 0.009 (threshold: 0.5)",
+    "image": "/home/upsilon/colcon_ws/rins-upsilon/upsilon/upsilon/image_reports/anomaly_3.png"
+  },
+  "3": {
+    "index": 4,
+    "x": -1.4024468660354614,
+    "y": -4.6,
+    "anomaly": false,
+    "message": "okay \u2014 max score: 0.008 (threshold: 0.5)",
+    "image": "/home/upsilon/colcon_ws/rins-upsilon/upsilon/upsilon/image_reports/anomaly_4.png"
+  }
+}

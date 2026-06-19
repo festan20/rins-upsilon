@@ -40,7 +40,7 @@ from turtle_tf2_py.turtle_tf2_broadcaster import quaternion_from_euler
 # --------------------------------------------------------------------------
 APPROACH_DISTANCE = 0.7    # metres — stop this far from a face/ring
 LOOK_DURATION_S   = 5.0    # seconds to pause looking at a face/ring (also lets TTS finish)
-NAV_TIMEOUT_S     = 30.0   # give up on a nav goal after this long
+NAV_TIMEOUT_S     = 45.0   # give up on a nav goal after this long
 SPIN_TIMEOUT_S    = 20.0   # give up on a spin after this long
 POLL_INTERVAL_S   = 0.3    # sleep between blocking polls
 LOC_COV_THRESHOLD = 0.3    # m² (x-var + y-var) above this → localization considered bad
@@ -54,26 +54,26 @@ FACE_RECOVERY_WP: tuple[float, float, float] | None = (-0.46, -3.88, 0.0)
 # Coverage waypoints [x, y, yaw_rad] in map frame.
 EXPLORATION_WAYPOINTS: list[tuple[float, float, float]] = [
     #Task2
-<<<<<<< Updated upstream
-    (0.5, 0.2, 3.14),
-    (0.5, -4.3, 0.0),
-    (-1.14, -2.01, 3.14 ),
-    (-2.98, -2.848, -1.57),
-    (-4.29, -0.04, 0.0),
-    (-2.15, 0.3284, 1.57),
+    (-0.02650618553161621, 0.3473774194717407, 2.3201),
+    (-2.3189234733581543, -0.2909505367279053, 1.4219),
+    (-4.21553897857666, -0.29095029830932617, 1.6952),
+    (-3.7117512226104736, -2.5431811809539795, -0.3724),
+    (-0.6890192031860352, -3.624845027923584, 1.1342),
+    (0.4963655471801758, -4.380528450012207, 0.0425),
+    (-0.31236982345581055, -4.411402702331543, 3.0849),
+    (0.940885066986084, -2.3209221363067627, 1.6952),
+    (0.85, -1.6, 1.7),
     (2.7586843967437744, 0.0148270009085536, -math.pi/2), #Must be last, start of blue line
 
-=======
-    (0.33709830045700073, -0.19402369856834412, math.radians(75)),
-    (0.3, -0.3, 1.6),
-    (0.823, -1.47, 0.0),
-    (-0.46, -3.88, 0.0),
-    (-2.98, -2.848, -math.pi/2),
-    (-4.13, -0.924, -math.pi/2),
-    (-2.53, 0.0924, 0.0),
-    (-0.5549578666687012, -0.7813922762870789, 0.0),
-    (2.7586843967437744, 0.0148270009085536, 0.0), #blue line
->>>>>>> Stashed changes
+    #(0.33709830045700073, -0.19402369856834412, math.radians(75)),
+    #(0.3, -0.3, 1.6),
+    #(0.823, -1.47, 0.0),
+    #(-0.46, -3.88, 0.0),
+    #(-2.98, -2.848, -math.pi/2),
+    #(-4.13, -0.924, -math.pi/2),
+    #(-2.53, 0.0924, 0.0),
+    #(-0.5549578666687012, -0.7813922762870789, 0.0),
+    #(2.7586843967437744, 0.0148270009085536, 0.0), #blue line
     
     # Real robot waypoints
     #(1.7515618801116943,  2.5002310276031494,  0.0),
@@ -735,6 +735,8 @@ class ControllerNode(Node):
         now = self.get_clock().now().to_msg()
         arr = MarkerArray()
         for ring in self._rings.values():
+            if ring.count < 5:
+                continue
             m = Marker()
             m.header.frame_id = 'map'
             m.header.stamp    = now
@@ -758,6 +760,8 @@ class ControllerNode(Node):
         now = self.get_clock().now().to_msg()
         arr = MarkerArray()
         for face in self._faces.values():
+            if face.count < 5:
+                continue
             m = Marker()
             m.header.frame_id = 'map'
             m.header.stamp    = now

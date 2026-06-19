@@ -63,7 +63,6 @@ COLOUR_RANGES = [
     ('red',    np.array([170, 100, 80]), np.array([179, 255, 255])),
     ('blue',   np.array([100, 80, 50]),  np.array([130, 255, 255])),
     ('green',  np.array([40, 60, 50]),   np.array([80, 255, 255])),
-    ('yellow', np.array([20, 100, 100]), np.array([35, 255, 255])),
     # black: low saturation AND low value — handled separately
 ]
 
@@ -118,7 +117,7 @@ class RingDetectorTask2Node(Node):
         self.bridge = CvBridge()
         self.depth_cam = DepthCameraGeometry(patch_radius=4)
         self.tf2 = TF2Helper(self)
-        self.tracker = IncrementalTrackManager(merge_distance=0.8)
+        self.tracker = IncrementalTrackManager(merge_distance=0.7)
 
         self._latest_bgr: np.ndarray | None = None
         self._latest_stamp = None
@@ -424,6 +423,8 @@ class RingDetectorTask2Node(Node):
         for track in self.tracker.tracks:
             colour = track.get('colour', 'unknown')
             count = track['count']
+            if count < 5:
+                continue
 
             # Cylinder marker
             m = Marker()
